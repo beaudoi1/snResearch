@@ -670,7 +670,6 @@ def plotEqw(spectra):
 		
 	fig = plt.figure(num = 5, dpi = 100, figsize = [10, (3*len(spec_num)) + 2], facecolor = 'w')
 	gs = gridspec.GridSpec(1,1)
-	#!!! plots eqws, needs work!!!!
 	plt.title(spectra[0].sn, fontdict = font)
 	plt.gca().axes.get_xaxis().set_visible(False)
 	plt.gca().axes.get_yaxis().set_visible(False)
@@ -687,7 +686,6 @@ def plotEqw(spectra):
 		plt.xlim(epochs[0], epochs[len(epochs) - 1])
 		ax.set_xticks(epochs)
 		ax.set_xticklabels([])
-		plt.gca().axes.get_xaxis().set_visible(False)
 		plt.gca().axes.get_yaxis().set_visible(True)
 		plt.gca().yaxis.set_major_locator(MaxNLocator(prune='lower'))
 		plt.gca().yaxis.set_major_locator(MaxNLocator(prune='upper'))
@@ -718,7 +716,6 @@ def plotEqw(spectra):
 		plt.xlim(epochs[0], epochs[len(epochs) - 1])
 		ax.set_xticks(epochs)
 		ax.set_xticklabels([])
-		plt.gca().axes.get_xaxis().set_visible(False)
 		plt.gca().axes.get_yaxis().set_visible(True)
 		plt.gca().yaxis.set_major_locator(MaxNLocator(prune='lower'))
 		plt.gca().yaxis.set_major_locator(MaxNLocator(prune='upper'))
