@@ -68,7 +68,7 @@ def setInc(sp):
 	sp.inc = inc
 	
 #Helper function for breakpoint functions which calculates normalized spectrum
-def interpolate(sp, bp):
+def interpolate(sp, bp, rand = False):
 	x = sp.wave
 	y = sp.flux
 	#remove absorption lines from spectrum
@@ -82,7 +82,18 @@ def interpolate(sp, bp):
 	
 	#create b-spline over spectrum
 	sm1 = inter.splrep(x[lines],y[lines])
-	xx = linspace(min(x),max(x), len(x) / 10)
+	xx = linspace(min(x), max(x), len(x) / 10)
+	
+	if (rand):
+		xx += np.random.randn(len(xx))
+		indecies = []
+		for i in range(len(xx)):
+			if (xx[i] < min(x)):
+				indecies.append(i)
+			if (xx[i] > max(x)):
+				indecies.append(i)
+		xx = np.delete(xx, indecies)
+	
 	linesxx = np.append([], np.where(xx<exclude[0]))
 	linesxx = [int(i) for i in linesxx]
 	i = 1
@@ -488,7 +499,7 @@ def monteCarlo(mc, sp, triplet = False):
 		nsp.flux = sp.flux
 		nsp.bkpts = randBreak(sp.bkpts)
 		nsp.inc = sp.inc
-		sp_flux, norm = interpolate(nsp, nsp.bkpts)
+		sp_flux, norm = interpolate(nsp, nsp.bkpts, True)
 		nsp.norm_flux = norm
 		nsp.sflux = sp_flux
 		nsp.cont_err = findErrors(nsp.flux, nsp.sflux)
