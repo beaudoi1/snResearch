@@ -87,11 +87,13 @@ def interpolate(sp, bp, rand = False):
 	if (rand):
 		xx += np.random.randn(len(xx))
 		indecies = []
-		for i in range(len(xx)):
+		i = len(xx) - 10
+		while (i < len(xx)):
 			if (xx[i] < min(x)):
 				indecies.append(i)
 			if (xx[i] > max(x)):
 				indecies.append(i)
+			i += 1
 		xx = np.delete(xx, indecies)
 	
 	linesxx = np.append([], np.where(xx<exclude[0]))
