@@ -256,6 +256,7 @@ def findEqw(sp, plot):
 	eqws = []
 	eqw_errs = []
 	param = []
+	chisq = []
 	while(g<len(guesses)):
 		inc = np.where((w>include[i]) & (w<include[i+1]))
 		wave = w[inc]
@@ -282,11 +283,13 @@ def findEqw(sp, plot):
 		for j in p1:
 			param.append(j)
 		
-		if(len(w) > len(p))	 and pcov is not None:
-			s_sq = (residual(p1, x, y)**2).sum()/(len(w)-len(p))
+		if(len(x) > len(p))	 and pcov is not None:
+			s_sq = (residual(p1, x, y)**2).sum()/(len(x)-len(p))
+			chisq.append(s_sq)
 			pcov = pcov * s_sq
 		else:
 			pcov = np.inf
+			chisq.append(None)
 		
 		errors = []
 		for j in range(len(p1)):
@@ -335,6 +338,7 @@ def findEqw(sp, plot):
 	sp.eqws = eqws
 	sp.eqw_errs = eqw_errs
 	sp.param = param
+	sp.chisq = chisq
 
 #helper function to monteCarlo() which calculates standard deviations	
 def findErr(temp, original, name, sn, ion):
@@ -454,9 +458,11 @@ def sepMgDoub(sp):
 
 	if (len(w) > len(p)) and pcov is not None:
 		s_sq = (residual(p1, rest1, rest1, x3, y3)**2).sum()/(len(w) - len(p))
+		chisq = s_sq
 		pcov = pcov * s_sq
 	else:
 		pcov = np.inf
+		chisq = None
 
 	errors = []
 	for j in range(len(p1)):
@@ -483,8 +489,11 @@ def sepMgDoub(sp):
 	oldErr = sp.eqw_errs
 	newErr = error
 	
+	oldChiSq = sp.chisq
+	
 	sp.eqws = [float(oldEqws[0]), float(newEqws[0]), float(newEqws[1]), float(oldEqws[2])]
 	sp.eqw_errs = [float(oldErr[0]), float(newErr[0]), float(newErr[1]), float(oldErr[2])]
+	sp.chisq = [oldChiSq[0], chisq, chisq, oldChiSq[2]]
 	
 	i = 3
 	while (i < count):
@@ -562,6 +571,8 @@ def saveData(sp):
 		if ('err_lo' in att[i]) & ('err_lo' not in attr):
 			attr = attr + (att[i],)
 		if ('err_hi' in att[i]) & ('err_hi' not in attr):
+			attr = attr + (att[i],)
+		if ('chisq' in att[i]) & ('chisq' not in attr):
 			attr = attr + (att[i],)
 		i += 1
 	
@@ -748,14 +759,14 @@ guesses = [-.3, 2797.1, 3.4, -.45, 2807.77, 7.4, -.34, 2815.21, 4.2, -.6199, 617
 ions = ['MgIIa', 'MgIIb', 'MgIIc', 'SiIIa']
 epochs = [.5023, 4.61405, 6.33734, 8.32473, 11.5869, 15.5064, 19.1053, 21.1529, 25.0071, 27.9399]
 
-
+"""
 #13dy params (w/out SiII)
 exclude = [2789.67, 2826.71, 2843.33, 2878.64]
 include = [2790.72, 2799.98, 2799.99, 2811.93, 2811.94, 2822.54]
 guesses = [-.3, 2797.1, 3.4, -.45, 2807.77, 7.4, -.34, 2815.21, 4.2]
 ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId']
 epochs = {'visit1': .5023, 'visit2': 4.61405, 'visit3':  6.33734, 'visit4':  8.32473, 'visit5':  11.5869, 'visit6':  15.5064, 'visit7':  19.1053, 'visit8':  21.1529, 'visit9':  25.0071, 'visit10':  27.9399}
-
+"""
 files = glob.glob('sn2013dy/Data/data/*.flm')
 spectra = []
 for f in files:
@@ -766,7 +777,7 @@ for f in files:
 	findEqw(sp, False)
 	spectra.append(sp)
 
-"""
+
 #11fe params
 
 exclude = [2341.34, 2350.47, 2372.48, 2390.04, 2583.58, 2607.58, 2789.51, 2813.78, 2848.5, 2862.16]
@@ -774,7 +785,7 @@ include = [2340.35, 2353.69, 2371.61, 2379.75, 2380, 2390.5, 2581.61, 2593.2, 25
 guesses = [-.3675, 2345, 3.7, -.205, 2375.98, 3.62, -.466, 2385.51, 3.99, -.3563, 2588.31, 4.5, -.464, 2602, 4.4, -.6416, 2798.05, 4.37, -.596, 2806.09, 4.1, -.1342, 2854.61, 4.29]
 ions=['FeIIa','FeIIb','FeIIc','MnIIa','MnIIb','MgIIa','MgIIb','MgIa']
 epochs = {'visit1': -13.110599,'visit2': -10.041886, 'visit3': -6.9081770, 'visit4': -2.9512300, 'visit5': 0.039233502, 'visit6': 3.2484383, 'visit7-obs1': 9.1496879, 'visit7-obs2+3': 9.1496879, 'visit8': 20.687449, 'visit9': 26.685855, 'visit10': 40.447814}
-"""
+
 #dir = 'sn2011fe/Data'
 #spectra = loadData(dir)
 
