@@ -257,6 +257,7 @@ def findEqw(sp, plot):
 	eqw_errs = []
 	param = []
 	chisq = []
+	dof = []
 	while(g<len(guesses)):
 		inc = np.where((w>include[i]) & (w<include[i+1]))
 		wave = w[inc]
@@ -284,12 +285,14 @@ def findEqw(sp, plot):
 			param.append(j)
 		
 		if(len(x) > len(p))	 and pcov is not None:
-			s_sq = (residual(p1, x, y)**2).sum()/(len(x)-len(p))
+			s_sq = (residual(p1, x, y)**2).sum()
 			chisq.append(s_sq)
-			pcov = pcov * s_sq
+			dof.append(len(x) - len(p))
+			pcov = pcov * s_sq / (len(x) - len(p))
 		else:
 			pcov = np.inf
 			chisq.append(None)
+			dof.append(None)
 		
 		errors = []
 		for j in range(len(p1)):
@@ -338,7 +341,8 @@ def findEqw(sp, plot):
 	sp.eqws = eqws
 	sp.eqw_errs = eqw_errs
 	sp.param = param
-	sp.chisq = chisq
+	sp.chisq_sum = chisq
+	sp.dof = dof
 
 #helper function to monteCarlo() which calculates standard deviations	
 def findErr(temp, original, name, sn, ion):
@@ -457,9 +461,10 @@ def sepMgDoub(sp):
 	sp.gausC = gaussian([p1[3], p1[4], p1[5]], rest1, w) + 1 
 
 	if (len(w) > len(p)) and pcov is not None:
-		s_sq = (residual(p1, rest1, rest1, x3, y3)**2).sum()/(len(w) - len(p))
+		s_sq = (residual(p1, rest1, rest1, x3, y3)**2).sum()
 		chisq = s_sq
-		pcov = pcov * s_sq
+		dof = len(x3) + len(x1) + len(x2) - len(p)
+		pcov = pcov * s_sq / (len(w) - len(p))
 	else:
 		pcov = np.inf
 		chisq = None
@@ -489,11 +494,13 @@ def sepMgDoub(sp):
 	oldErr = sp.eqw_errs
 	newErr = error
 	
-	oldChiSq = sp.chisq
+	oldChiSq = sp.chisq_sum
+	oldDof = sp.dof
 	
 	sp.eqws = [float(oldEqws[0]), float(newEqws[0]), float(newEqws[1]), float(oldEqws[2])]
 	sp.eqw_errs = [float(oldErr[0]), float(newErr[0]), float(newErr[1]), float(oldErr[2])]
-	sp.chisq = [oldChiSq[0], chisq, chisq, oldChiSq[2]]
+	sp.chisq_sum = [oldChiSq[0], chisq, chisq, oldChiSq[2]]
+	sp.dof = [oldDof[0], dof, dof, oldDof[2]]
 	
 	i = 3
 	while (i < count):
@@ -548,6 +555,15 @@ def calcErr(sp):
 	sp.err_lo = err_lo
 	sp.err_hi = err_hi
 	
+	avg_err = []
+	for a in range(len(err_lo)):
+		avg_err.append(np.average([err_lo, err_hi]))
+	
+	chisq = []
+	for a in range(len(sp.chisq_sum)):
+		chisq.append(sp.chisq_sum[a] / avg_err[a])
+	sp.chisq = chisq
+	
 	t = Table([ions, sp.err_lo, sp.err_hi], names = ('col1','col2','col3'))
 	t.write('sn' + sp.sn + '/Data/eqw/errors/' + sp.name + '.flm', format='ascii')
 
@@ -573,6 +589,8 @@ def saveData(sp):
 		if ('err_hi' in att[i]) & ('err_hi' not in attr):
 			attr = attr + (att[i],)
 		if ('chisq' in att[i]) & ('chisq' not in attr):
+			attr = attr + (att[i],)
+		if ('dof' in att[i]) & ('dof' not in attr):
 			attr = attr + (att[i],)
 		i += 1
 	
@@ -689,8 +707,20 @@ def plotEqw(spectra):
 			if s in i:
 				num += 1
 		spec_num.append(num)
+
+	weights = []
+	for i in range(len(hi_err)):
+		var = []
+		for j in range(len(hi_err[i])):
+			avg = (lo_err[i][j] + hi_err[i][j]) / 2
+			var.append(1/avg**2)
+		weights.append(var)
+		
+	stdDev = []
+	medErr = []
 		
 	font = {'family' : 'serif','color'  : 'black','weight' : 'bold','size' : 10,} 
+	colors = ['black', 'blue', 'cyan', 'green']
 		
 	fig = plt.figure(num = 5, dpi = 100, figsize = [10, (3*len(spec_num)) + 2], facecolor = 'w')
 	gs = gridspec.GridSpec(1,1)
@@ -701,13 +731,14 @@ def plotEqw(spectra):
 	for j in range(len(species)):
 		k = 0
 		ax = fig.add_subplot(len(species), 1, j+1)
-		plt.gca().set_color_cycle(['black', 'blue', 'cyan', 'green'])
+		plt.gca().set_color_cycle(colors)
 		while (k < spec_num[j]):
-			ax.errorbar(epochs, eqws[count], yerr = [lo_err[count], hi_err[count]], label = ions[count])
+			ax.scatter(epochs, eqws[count], color = colors[k])
+			ax.errorbar(epochs, eqws[count], yerr = [lo_err[count], hi_err[count]], label = ions[count], linestyle = "None")
 			k += 1
 			count += 1
 		ax.text(.5, .9, species[j], horizontalalignment = 'center', transform = ax.transAxes, fontdict = font)
-		plt.xlim(epochs[0], epochs[len(epochs) - 1])
+		plt.xlim(epochs[0] - 1, epochs[len(epochs) - 1] + 1)
 		ax.set_xticks(epochs)
 		ax.set_xticklabels([])
 		plt.gca().axes.get_yaxis().set_visible(True)
@@ -731,13 +762,14 @@ def plotEqw(spectra):
 	for j in range(len(species)):
 		k = 0
 		ax = fig.add_subplot(len(species), 1, j+1)
-		plt.gca().set_color_cycle(['black', 'blue', 'cyan', 'green'])
+		plt.gca().set_color_cycle(colors)
 		while (k < spec_num[j]):
-			ax.errorbar(epochs, eqws[count] - np.average(eqws[count]), yerr = [lo_err[count], hi_err[count]], label = ions[count])
+			ax.scatter(epochs, eqws[count] - np.average(eqws[count], weights = weights[count]), color = colors[k])
+			ax.errorbar(epochs, eqws[count] - np.average(eqws[count], weights = weights[count]), yerr = [lo_err[count], hi_err[count]], label = ions[count], linestyle = "None")
 			k += 1
 			count += 1
 		ax.text(.5, .9, species[j], horizontalalignment = 'center', transform = ax.transAxes, fontdict = font)
-		plt.xlim(epochs[0], epochs[len(epochs) - 1])
+		plt.xlim(epochs[0] - 1, epochs[len(epochs) - 1] + 1)
 		ax.set_xticks(epochs)
 		ax.set_xticklabels([])
 		plt.gca().axes.get_yaxis().set_visible(True)
@@ -751,6 +783,26 @@ def plotEqw(spectra):
 	plt.subplots_adjust(hspace = 0, right = .8)
 	plt.savefig(spectra[0].dir + 'eqw/delta EQW by Epoch.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
 	plt.show()
+	
+	fig = plt.figure(num = 7, dpi = 100, figsize = [10, 5], facecolor = 'w')
+	gs = gridspec.GridSpec(1,1)
+	stdDev = []
+	medErr = []
+	for j in range(len(eqws)):
+		stdDev.append(np.std(eqws[j]))
+		error = []
+		for i in range(len(lo_err[j])):
+			error.append(np.average([lo_err[j][i], hi_err[j][i]]))
+		medErr.append(np.average(error))
+	plt.title(spectra[0].sn + 'std dev vs. med Err', fontdict = font)
+	for i in range(len(ions)):
+		plt.scatter(medErr[i], stdDev[i], label = ions[i], color = colors[i])
+	plt.ylabel('Std. Dev.', fontdict = font)
+	plt.xlabel('Med. Err.', fontdict = font)
+	legend = plt.legend(bbox_to_anchor = (1, 1), loc = 2, shadow = True, prop = {'family': 'serif'})
+	plt.savefig(spectra[0].dir + 'eqw/stddev_vs_mederr.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+	plt.show()
+	
 
 """
 exclude = [2789.67, 2826.71, 2843.33, 2878.64, 6025.46, 6344.41]
