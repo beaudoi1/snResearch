@@ -2,7 +2,7 @@
 #
 # author: Aaron Beaudoin
 #
-# Spectral line analysis tool to be run in ipython.
+# Spectral line analysis tool to be run in iPython.
 #
 # Directory structure:
 # spAnalyze.py/"Supernova name"/Data/:
@@ -11,10 +11,49 @@
 #	eqw/
 #		errors
 #		MonteCarlo/Histograms
+#		limits
+#	Pictures/
+#		hwr
+#		norm_vs_res
+# 	param
 #	include
 #	spectra
 #
-# Example code in Run.py in parent directory
+# Classes and functions:
+# 	spectrum(object)
+#	initSpec(file)
+#	setGlobals(exclude, ions, epochs, order5, bins)
+#	saveInc(spectrum)
+#	loadInc(spectrum)
+#	setInc(spectrum)
+#	interpolate(spectrum, breakpoints, randomize = False)
+#	spNames(file, spectrum)
+# 	savgol(flux, window_size, order, deriv = 0, rate = 1)
+# 	findErrors(flux)
+# 	getSpectrum(file, spectrum)
+# 	findNewBkpts(spectrum)
+#	getBkpts(spectrum)
+#	addBkpts(spectrum)
+# 	randBreak(breakpoints, shift = 2.5)
+#	sigma3(spectrum, rest_wave, redshift = .01)
+# 	getLimits(spectrum, rest_wave, height, sigma, redshift = .01, plots = False)
+# 	findEqw(spectrum, plot = False)
+# 	findErr(randomEqws, actualEqw, spectrum.name, spectrum.dir, ion)
+# 	sepMgDoub(spectrum, fits = True)
+#	sepFeDoub(spectrum, rest_wave1, rest_wave2)
+# 	monteCarlo(numberForMC, spectrum, triplet = False, plot = False)
+# 	calcErr(spectrum)
+#	saveParam(spectrum)
+#	loadParam(spectrum)
+# 	saveData(spectrum)
+# 	loadData(directory)
+#	chiSq(spectra)
+# 	plotEqw(spectra)
+# 	testPlots(spectra)
+#	scaleFlux(spectrum1, spectrum2)
+#	scaledPlots(spectra)
+#	proPlot(spectra)
+#	pickSN()
 #
 # Uses astropy, numpy, scipy, matplotlib, glob, sys, and math packages.
 #############################################################################
@@ -31,29 +70,38 @@ from matplotlib.ticker import MaxNLocator
 import glob
 import sys
 import math
+from math import factorial
 
 #initializes spectrum class
 class spectrum(object):
 	"""Attributes can be added"""
 
+#Retrieves initial spectrum properties
+def initSpec(f):
+	s = spectrum()
+	spNames(f, s)
+	getSpectrum(f, s)
+	return s
+	
 #sets parameters used throughout
 #param array ex- x values of lines to exclude in normalizing spectrum.
-#param array g- guesses for height, wavelength, width for each absorption line.
-#param array inc- x values of lines to include in Gaussian fitting.
 #param array i- List of ions to search for.
 #param array ep- Epochs of each visit. Ex. {'visit1': 0.111, ...}
-def setGlobals(ex, g, inc, i, ep):
+#param array ord- Orders of each visit for b-spline creation
+#param array bin- Size of wavelength bins for b-spline creation
+def setGlobals(ex, i, ep, ord, bin):
 	global exclude
-	global guesses
-	global include
 	global ions
 	global epochs
+	global order5
+	global bins
 	exclude = ex
-	guesses = g
-	include = inc
 	ions = i
 	epochs = ep
+	order5 = ord
+	bins = bin
 
+#Sets, saves, or loads values that determine the wavelength ranges to include in Equivalent Width measurements
 def saveInc(sp):
 	zeros = np.zeros(len(sp.inc))
 	t = Table([sp.inc, zeros], names = ('col1', 'col2'))
@@ -81,11 +129,16 @@ def interpolate(sp, bp, rand = False):
 	lines = np.append(lines, np.where(x>exclude[len(exclude)-1]))
 	
 	#create b-spline over spectrum
-	sm1 = inter.splrep(x[lines],y[lines])
-	xx = linspace(min(x), max(x), len(x) / 10)
+	m = len(y)
+	s = (m-  np.sqrt(2 * m), m + np.sqrt(2 * m))
+	sm1 = inter.splrep(x[lines],y[lines], w = sp.var[lines], k = sp.order, s = s[1])
+	xx = linspace(min(x), max(x), round(len(x) / sp.bin, 0))
 	
 	if (rand):
-		xx += np.random.randn(len(xx))
+		shift = 1
+		if (sp.sn == '2012cg'):
+			shift = .5
+		xx += np.random.randn(len(xx)) * shift
 		indecies = []
 		i = len(xx) - 10
 		while (i < len(xx)):
@@ -111,7 +164,7 @@ def interpolate(sp, bp, rand = False):
 	
 	#fits b-spline over wavelength range
 	y1 = inter.splev(xx,sm1)
-	sm2 = inter.splrep(xx, y1)
+	sm2 = inter.splrep(xx, y1, k = sp.order)
 	y2 = inter.splev(x, sm2)
 	
 	#creates normalized spectrum
@@ -129,7 +182,7 @@ def spNames(file, sp):
 	sn = sn[2:]
 	sn = sn[:sn.index('-')]
 	
-	dir = file[:14]
+	dir = 'sn' + sn + '/Data/'
 	
 	visit = file[file.index('visit'):]
 	visit = visit[5:]
@@ -145,33 +198,47 @@ def spNames(file, sp):
 		sp.visit = float(temp)
 	
 	sp.epoch = epochs[sp.name]
+	if sp.visit in order5:
+		sp.order = 5
+	else:
+		sp.order = 3
+	sp.bin = bins[sp.visit]
 		
-#helper function to findErrors()		
-def smooth(x,window_len=11,window='hanning'):
-	if x.ndim != 1:
-			raise ValueError, "smooth only accepts 1 dimension arrays."
-	if x.size < window_len:
-			raise ValueError, "Input vector needs to be bigger than window size."
-	if window_len<3:
-			return x
-	if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
-			raise ValueError, "Window is on of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'"
-	s=np.r_[2*x[0]-x[window_len-1::-1],x,2*x[-1]-x[-1:-window_len:-1]]
-	if window == 'flat': #moving average
-			w=np.ones(window_len,'d')
-	else:  
-			w=eval('np.'+window+'(window_len)')
-	y=np.convolve(w/w.sum(),s,mode='same')
-	return y[window_len:-window_len+1]
-
+#helper function to findErrors()
+def savgol(y, window_size, order, deriv=0, rate=1):
+    try:
+        window_size = np.abs(np.int(window_size))
+        order = np.abs(np.int(order))
+    except ValueError, msg:
+        raise ValueError("window_size and order have to be of type int")
+    if window_size % 2 != 1 or window_size < 1:
+        raise TypeError("window_size size must be a positive odd number")
+    if window_size < order + 2:
+        raise TypeError("window_size is too small for the polynomials order")
+    order_range = range(order+1)
+    half_window = (window_size -1) // 2
+    # precompute coefficients
+    b = np.mat([[k**i for i in order_range] for k in range(-half_window, half_window+1)])
+    m = np.linalg.pinv(b).A[deriv] * rate**deriv * factorial(deriv)
+    # pad the signal at the extremes with
+    # values taken from the signal itself
+    firstvals = y[0] - np.abs( y[1:half_window+1][::-1] - y[0] )
+    lastvals = y[-1] + np.abs(y[-half_window-1:-1][::-1] - y[-1])
+    y = np.concatenate((firstvals, y, lastvals))
+    return np.convolve( m[::-1], y, mode='valid')	
+	
 #finds noise error in spectrum	
-def findErrors(y,sflux):	
-	sf=smooth(y)
+def findErrors(y):
+	win = round(len(y) / 10, 0)
+	if win % 2 == 0:
+		win += 1
+	win = 11
+	sf=savgol(y, win, 5)
 	res=y-sf
 	ares=np.abs(res)
-	se = smooth(ares)
-	norm_e = se/sflux
-	return norm_e
+	se = savgol(ares, win, 5)
+	#norm_e = se/sflux
+	return se
 
 #Gets spectrum from FLM file	
 def getSpectrum(file, sp):
@@ -183,6 +250,7 @@ def getSpectrum(file, sp):
 def findNewBkpts(sp):
 	x = sp.wave
 	y = sp.flux
+	sp.var = findErrors(y)**-1
 	k = 1
 	sflux = 0
 	while(k == 1):
@@ -197,44 +265,225 @@ def findNewBkpts(sp):
 		plt.plot(x, norm)
 		plt.ylim(0,1.5)
 		plt.show()
-		cont = raw_input('More breakpoints?: (y/n) ')
-		if (cont == 'y'):
-			continue
-		else:
-			sp.norm_flux = norm
-			sp.sflux = sp_flux
-			sp.bkpts = bps
-			k = 2
+		t = True
+		while(t):
+			cont = raw_input('More breakpoints?: (y/n) ')
+			if (cont == 'y'):
+				t = False
+			elif (cont == 'n'):
+				sp.norm_flux = norm
+				sp.sflux = sp_flux
+				sp.bkpts = bps
+				k = 2
+				t = False
+			else:
+				continue
 	
 	temp = np.zeros(len(sp.bkpts))
 	t = Table([sp.bkpts, temp], names = ('col1','col2'))
 	t.write('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format='ascii')
-	sp.cont_err = findErrors(y, sp.sflux)
 
 #retrieves previously calculated breakpoints from FLM files and records normalized spectrum
 def getBkpts(sp):
 	t = Table.read('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format='ascii')
 	sp.bkpts = t["col1"]
+	sp.var = (findErrors(sp.flux)**-1)
 	sp_flux, norm = interpolate(sp, sp.bkpts)
 	sp.norm_flux = norm
 	sp.sflux = sp_flux
-	sp.cont_err = findErrors(sp.flux, sp.sflux)
 
+def addBkpts(sp):
+	x = sp.wave
+	y = sp.flux
+	sp.var = findErrors(y)**-1
+	k = 1
+	sflux = 0
+	while(k == 1):
+		points = input('Breakpoints for ' + sp.name + ': ')
+		bps = [float(i) for i in points]
+		bps = np.append(bps, sp.bkpts)
+		bps.sort()
+		sp_flux, norm = interpolate(sp, bps)
+		plt.figure(1)
+		plt.plot(x, y)
+		plt.plot(x, sp_flux)
+		plt.show()
+		plt.figure(2)
+		plt.plot(x, norm)
+		plt.ylim(0,1.5)
+		plt.show()
+		t = True
+		while(t):
+			cont = raw_input('More breakpoints?: (y/n) ')
+			if (cont == 'y'):
+				t = False
+			elif (cont == 'n'):
+				sp.norm_flux = norm
+				sp.sflux = sp_flux
+				sp.bkpts = bps
+				k = 2
+				t = False
+			else:
+				continue
+	
+	temp = np.zeros(len(sp.bkpts))
+	t = Table([sp.bkpts, temp], names = ('col1','col2'))
+	t.write('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format='ascii')
+	
 #helper function to monteCarlo(), randomizes breakpoints for variation in EQWs	
-def randBreak(breakpoints):
+def randBreak(breakpoints, shift = 2.5):
 	bkpts = []
 	for b in breakpoints:
 		bkpts.append(b)
-	bshift = np.random.randn(len(bkpts)) * 2.5
+	bshift = np.random.randn(len(bkpts)) * shift
 	new_bkpts = bshift + bkpts
 	return new_bkpts
 
+#Finds signal-to-noise 3 sigma limits for a given spectrum
+def sigma3(sp, rest, red = .01):
+	gaussian = lambda p, w, x: p[0]*np.exp(-(x - w*(1 + p[2]))**2 / (2*p[1]**2))
+	
+	gauss = gaussian([-.3, 3, red], rest, sp.wave)
+	ind = np.where(gauss < -.001)
+	
+	res = 1 - sp.norm_flux[ind]
+	temp = []
+	for r in res:
+		temp.append(r**2)
+	rms = np.sqrt(np.sum(temp) / len(res))
+	
+	sp.sig3 = 9/np.sqrt(2) * rms
+	
+#Finds signal-to-noise limits for a given spectrum
+def getLimits(sp, rest, height, sigma, red = .01, plots = False):
+	gaussian = lambda p, w, x: p[0]*np.exp(-(x - w*(1 + p[2]))**2 / (2*p[1]**2))
+	
+	norm_flux = sp.norm_flux
+
+	#sigma = np.linspace(2.4, 4, 17)
+	#sigma = np.linspace(2.6, 4, 15)
+	#height = np.linspace(-.02, -.4, 39)
+	#height = np.linspace(-.03, -.3, 28)
+	
+	#sigma = np.linspace(3, 4, 11)
+	#height = np.append(np.linspace(-.03, -.05, 5), np.linspace(-.06, -.3, 25))
+	
+	red = [red]
+	
+	meas = []
+	guess = []
+	err = []
+	snr = []
+	params = []
+	for s in sigma:
+		for h in height:
+			for r in red:
+				gauss = gaussian([h, s, r], rest, sp.wave)
+				xindecies = np.where(gauss < -.001)
+				xindecies = xindecies[0]
+				xmin = sp.wave[min(xindecies)] - 1
+				xmax = sp.wave[max(xindecies)] + 1
+				flux = sp.norm_flux + gauss
+				g = integrate.quad(lambda x: h * np.exp(-(x-rest*(1+r))**2/(2*s**2)), min(sp.wave), max(sp.wave))[0] * -1
+				sp.norm_flux = flux
+				sp.inc = [xmin, xmax]
+				setGlobals(sp.inc, sp.inc, ions, epochs, sp.order, sp.bin)
+				if(plots):
+					findEqw(sp, True)
+					plt.xlim(2750, 3100)
+					plt.ylim(0, 2)
+					plt.savefig(sp.dir + 'eqw/limits/fits/' + sp.name + '/' + sp.name + '_' + str(h) + '.' + str(s) + '.' + str(r) + '.png')
+					plt.close()
+				else:
+					findEqw(sp, False)
+				ew = sp.eqws[0]
+				er = sp.eqw_errs[0]
+				sn = ew / er
+				if ((g > .05) & (er != 0)):
+					guess.append(g)
+					meas.append(ew)
+					err.append(er)
+					snr.append(sn)
+					params.append([h, s, r])
+				
+				sp.norm_flux = norm_flux
+		
+	font = {'family' : 'serif','color'  : 'black','weight' : 'bold','size' : 10,} 
+	plt.figure()
+	plt.scatter(guess, meas)
+	plt.xlabel('EW In', fontdict = font)
+	plt.ylabel('EW Out', fontdict = font)
+	fit = np.polyfit(guess, meas, 1)
+	x = np.linspace(-1, 7, 9)
+	y = fit[0] * x + fit[1]
+	plt.plot(x, y, linewidth = 3, color = 'r')
+	plt.savefig(sp.dir + 'eqw/limits/' + sp.name + '_meas_vs_gauss' + str(r) + '.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+	plt.show()
+		
+	fit = np.polyfit(guess, snr, 1)
+	x = np.linspace(-1, 7, 9)
+	y = fit[0] * x + fit[1]
+	
+	snr1 = (1 - fit[1]) / fit[0]
+	snr3 = (3 - fit[1]) / fit[0]
+	ew1 = 0
+	ew3 = 0
+	diff1 = 999999
+	diff3 = 999999
+	p1 = []
+	p3 = []
+	for i in range(len(snr)):
+		temp = np.abs(1 - snr[i])
+		if (temp < diff1):
+			diff1 = temp
+			ew1 = guess[i]
+			#snr1 = snr[i]
+			p1 = params[i]
+		temp = np.abs(3 - snr[i])
+		if (temp < diff3):
+			diff3 = temp
+			ew3 = guess[i]
+			#snr3 = snr[i]
+			p3 = params[i]
+		
+	plt.figure()
+	plt.scatter(guess, snr)
+	plt.plot(x, y, linewidth = 2.5, color = 'r')
+	plt.text(4, 0, 'SNR 1: ' + str(round(snr1, 2)), fontdict = font)
+	plt.text(7, 0, 'SNR 3: ' + str(round(snr3, 2)), fontdict = font)
+	plt.ylabel('EW Out / EW Err (SNR)')
+	plt.xlabel('EW In')
+	#plt.xlim(-1,8)
+	#plt.ylim(-1,8)
+	plt.savefig(sp.dir + 'eqw/limits/' + sp.name + '_SNR_vs_gauss' + str(r) +'.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+	plt.show()
+			
+	plt.figure()
+	plt.title('SNR 1', fontdict = font)
+	plt.plot(sp.wave, sp.norm_flux + gaussian(p1, rest, sp.wave), color = 'k', linestyle = 'steps', linewidth = 2)
+	plt.xlim(2750, 2900)
+	plt.ylim(0, 1.5)
+	plt.xlabel('Wavelength')
+	plt.ylabel('Normalized Flux')
+	plt.savefig(sp.dir + 'eqw/limits/' + sp.name + '_SNR1' + str(r) + '.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+	plt.show()
+	
+	plt.figure()
+	plt.title('SNR 3', fontdict = font)
+	plt.plot(sp.wave, sp.norm_flux + gaussian(p3, rest, sp.wave), color = 'k', linestyle = 'steps', linewidth = 2)
+	plt.xlim(2750, 2900)
+	plt.ylim(0, 1.5)
+	plt.xlabel('Wavelength')
+	plt.ylabel('Normalized Flux')
+	plt.savefig(sp.dir + 'eqw/limits/' + sp.name + '_SNR3' + str(r) + '.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+	plt.show()
+	
 #find EQWs for lines in spectrum sp	
-def findEqw(sp, plot):
+def findEqw(sp, plot = False):
 	include = sp.inc
 	w = sp.wave
 	f = sp.norm_flux
-	e = sp.cont_err
+	#e = sp.cont_err
 	
 	gaussian = lambda p, x: 1+p[0]*np.exp(-(x-p[1])**2/(2*p[2]**2))
 	residual = lambda p, x, y: y - gaussian(p, x)
@@ -252,21 +501,18 @@ def findEqw(sp, plot):
 			baseline_y.append(1)
 
 	i=0
-	g=0
 	eqws = []
 	eqw_errs = []
 	param = []
-	chisq = []
-	dof = []
-	while(g<len(guesses)):
+	while(i<len(include)):
 		inc = np.where((w>include[i]) & (w<include[i+1]))
 		wave = w[inc]
 		flux = f[inc]
-		errs = e[inc]
+		#errs = e[inc]
 		
 		x = np.array(wave)
 		y = np.array(flux)
-		err = np.array(errs)
+		#err = np.array(errs)
 		
 		rest1 = 2796.354
 		rest2 = 2803.5311
@@ -277,22 +523,21 @@ def findEqw(sp, plot):
 			if (y[j] < fmin):
 				fmin = y[j]
 				wobs = x[j]
+				
+		width = .68 * (include[i + 1] - include[i])
 						
-		p = [fmin - 1, wobs, guesses[g+2]]
+		p = [fmin - 1, wobs, width]
 		p1, pcov, infodict, errmsg, success= optimize.leastsq(residual, p[:], args=(x,y), full_output = 1)
-		gaus = gaussian(p1, x)
+		hix = np.linspace(min(x), max(x), len(x) * 10)
+		gaus = gaussian(p1, hix)
 		for j in p1:
 			param.append(j)
 		
 		if(len(x) > len(p))	 and pcov is not None:
 			s_sq = (residual(p1, x, y)**2).sum()
-			chisq.append(s_sq)
-			dof.append(len(x) - len(p))
 			pcov = pcov * s_sq / (len(x) - len(p))
 		else:
 			pcov = np.inf
-			chisq.append(None)
-			dof.append(None)
 		
 		errors = []
 		for j in range(len(p1)):
@@ -307,7 +552,7 @@ def findEqw(sp, plot):
 		
 		if(plot):
 			for j in range(len(gaus)):
-				baseline_x.append(x[j])
+				baseline_x.append(hix[j])
 				baseline_y.append(gaus[j])
 			
 			if(i<len(include)-2):
@@ -325,7 +570,6 @@ def findEqw(sp, plot):
 		eqw_errs.append(error)
 		
 		i+=2
-		g+=3
 
 	if(plot):
 		for e in range(len(end[0])):
@@ -333,19 +577,17 @@ def findEqw(sp, plot):
 			baseline_y.append(1)
 		
 		plt.figure()
-		plt.plot(baseline_x,baseline_y,label='gaus')
 		plt.plot(w,f,label='cont')
+		plt.plot(baseline_x,baseline_y,label='gaus')
 		legend = plt.legend(loc='upper right')
 		plt.show()
 	
 	sp.eqws = eqws
 	sp.eqw_errs = eqw_errs
 	sp.param = param
-	sp.chisq_sum = chisq
-	sp.dof = dof
 
 #helper function to monteCarlo() which calculates standard deviations	
-def findErr(temp, original, name, sn, ion):
+def findErr(temp, original, name, dir, ion):
 	eqws = temp
 	eqws.sort()
 	n = len(eqws)
@@ -367,43 +609,16 @@ def findErr(temp, original, name, sn, ion):
 	plt.plot([med],[2],'ko', label='median')
 	plt.plot([original],[2],'ro', label='original')
 	legend=plt.legend(loc='upper right')
-	plt.savefig('sn' + sn + '/Data/eqw/MonteCarlo/Histograms/MCHist' + name + '-' + ion + '.png',orientation='landscape')
+	plt.savefig(dir + 'eqw/MonteCarlo/Histograms/MCHist' + name + '-' + ion + '.png',orientation='landscape')
 	plt.close()
 	
 	return mc_lo, mc_hi
-
-#def find_red(sp):	
-	gaussian = lambda p, w, x: 1+p[0]*np.exp(-(x-w)**2/(2*p[1]**2))
-	redshift = lambda obs, emit: (obs / emit) - 1
-	wave_obs = lambda z, emit: (z + 1) * emit
-	
-	w = sp.wave
-	f = sp.norm_flux
-	
-	inc = np.where((w > include[0]) & (w<include[1]))
-	wave = w[inc]
-	flux = f[inc]
-	
-	x = np.array(wave)
-	y = np.array(flux)
-	
-	wmin = 0
-	fmin = 12341234
-	for i in range(len(x)):
-		if(y[i] < fmin):
-			fmin = y[i]
-			wmin = x[i]
 	
 #Separates MgII doublets at 2800 angstroms from galaxy absorption and Milky Way absorption.
-def sepMgDoub(sp):
-	#inc = [2790.72, 2799.98, 2799.99, 2811.93, 2811.94, 2822.54]
-	#inc = [2792.49, 2802.9, 2802.91, 2813.53, 2813.54, 2823.94]
+def sepMgDoub(sp, fit = True):
 	inc = sp.inc
 	rest1 = 2796.354
 	rest2 = 2803.5311
-
-	guess = [2.02, 3.27]
-	#guess = [sp.param[2], sp.param[5]]
 
 	gaussian = lambda p, w, x: p[0]*np.exp(-(x - w*(1 + p[2]))**2 / (2*p[1]**2))
 	doubGaus = lambda p, rest1, rest2, x: gaussian([p[0],p[1],p[2]], rest1, x) + gaussian([p[0],p[1],p[2]], rest2, x)
@@ -418,6 +633,7 @@ def sepMgDoub(sp):
 	inc1 = np.where((w>inc[0]) & (w<inc[1]))
 	inc3 = np.where((w>inc[2]) & (w<inc[3]))
 	inc2 = np.where((w>inc[4]) & (w<inc[5]))
+	include = np.where((w>inc[0]) & (w<inc[5]))
 
 	wave1 = w[inc1]
 	flux1 = f[inc1]
@@ -425,6 +641,8 @@ def sepMgDoub(sp):
 	flux2 = f[inc2]
 	wave3 = w[inc3]
 	flux3 = f[inc3]
+	wave = w[include]
+	flux = f[include]
 
 	x1 = np.array(wave1)
 	y1 = np.array(flux1)
@@ -432,6 +650,8 @@ def sepMgDoub(sp):
 	y2 = np.array(flux2)
 	x3 = np.array(wave3)
 	y3 = np.array(flux3)
+	x = np.array(wave)
+	y = np.array(flux)
 
 	wobs1 = 0
 	fmin1 = 134121324
@@ -454,20 +674,24 @@ def sepMgDoub(sp):
 
 	p = [fmin1 - 1, guess[0], z1, fmin2 - 1, guess[1], z2]
 
-	p1, pcov, infodict, errmsg, success = optimize.leastsq(residual, p[:], args = (rest1, rest2, x3, y3), full_output = 1)
+	p1, pcov, infodict, errmsg, success = optimize.leastsq(residual, p[:], args = (rest1, rest2, w, f), full_output = 1)
 
-	sp.comb = combGaus(p1, rest1, rest2, w) + 1
-	sp.gausB = gaussian([p1[0], p1[1], p1[2]], rest2, w) + 1
-	sp.gausC = gaussian([p1[3], p1[4], p1[5]], rest1, w) + 1 
+	if (fit):
+		sp.wfit = np.linspace(min(w), max(w), len(w) * 10)
+		sp.comb = combGaus(p1, rest1, rest2, sp.wfit) + 1
+		sp.gausB = gaussian([p1[0], p1[1], p1[2]], rest2, sp.wfit) + 1
+		sp.gausC = gaussian([p1[3], p1[4], p1[5]], rest1, sp.wfit) + 1 
+		pa = [p1[0], p1[1], p1[2], p1[0], p1[1], p1[2]]
+		pb = [p1[3], p1[4], p1[5], p1[3], p1[4], p1[5]]
+		sp.doubA = doubGaus(pa, rest1, rest2, sp.wfit) + 1
+		sp.doubB = doubGaus(pb, rest1, rest2, sp.wfit) + 1
+		sp.sing = gaussian(pa[:3], rest1, sp.wfit) + gaussian(pb[:3], rest2, sp.wfit) + 1
 
 	if (len(w) > len(p)) and pcov is not None:
-		s_sq = (residual(p1, rest1, rest1, x3, y3)**2).sum()
-		chisq = s_sq
-		dof = len(x3) + len(x1) + len(x2) - len(p)
+		s_sq = (residual(p1, rest1, rest2, x3, y3)**2).sum()
 		pcov = pcov * s_sq / (len(w) - len(p))
 	else:
 		pcov = np.inf
-		chisq = None
 
 	errors = []
 	for j in range(len(p1)):
@@ -483,47 +707,192 @@ def sepMgDoub(sp):
 	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))	
 	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
 	
-	eqws = []	
+	eqws = []
+	eqws.append(np.abs(integrate.quad(lambda x: p1[0] * np.exp(-(x-rest1*(1+p1[2]))**2/(2*p1[1]**2)), min(x1), max(x2))[0]))
 	eqws.append(np.abs(integrate.quad(lambda x: p1[0] * np.exp(-(x-rest2*(1+p1[2]))**2/(2*p1[1]**2)), min(x1), max(x2))[0]))
 	eqws.append(np.abs(integrate.quad(lambda x: p1[3] * np.exp(-(x-rest1*(1+p1[5]))**2/(2*p1[4]**2)), min(x1), max(x2))[0]))
-	
+	eqws.append(np.abs(integrate.quad(lambda x: p1[3] * np.exp(-(x-rest2*(1+p1[5]))**2/(2*p1[4]**2)), min(x1), max(x2))[0]))
+
 	count = len(sp.eqws)
 	oldEqws = sp.eqws
 	newEqws = eqws
 	
 	oldErr = sp.eqw_errs
-	newErr = error
+	newErr = error	
 	
-	oldChiSq = sp.chisq_sum
-	oldDof = sp.dof
+	temp = []
+	tempErr = []
+	add = True
+	j = 0
+	for i in range(len(ions)):
+		if 'MgII' in ions[i]:
+			if add:
+				temp.append(float(newEqws[0]))
+				temp.append(float(newEqws[1]))
+				temp.append(float(newEqws[2]))
+				temp.append(float(newEqws[3]))
+				tempErr.append(float(newErr[0]))
+				tempErr.append(float(newErr[0]))
+				tempErr.append(float(newErr[1]))
+				tempErr.append(float(newErr[1]))
+				add = False
+				j -= 1
+		else:
+			temp.append(float(oldEqws[j]))
+			tempErr.append(float(oldErr[j]))
+		j += 1
+			
+	sp.eqws = temp
+	sp.eqw_errs = tempErr
 	
-	sp.eqws = [float(oldEqws[0]), float(newEqws[0]), float(newEqws[1]), float(oldEqws[2])]
-	sp.eqw_errs = [float(oldErr[0]), float(newErr[0]), float(newErr[1]), float(oldErr[2])]
-	sp.chisq_sum = [oldChiSq[0], chisq, chisq, oldChiSq[2]]
-	sp.dof = [oldDof[0], dof, dof, oldDof[2]]
+	sp.param = p1
 	
-	i = 3
-	while (i < count):
-		sp.eqws.append(float(oldEqws[i]))
-		sp.eqw_errs.append(float(oldErr[i]))
+#Separates FeII doublets at 2 rest wavelengths set on function call. 
+def sepFeDoub(sp, rest1, rest2):
+	inc = sp.inc
+
+	guess = []
+	i = 0
+	while(i < len(inc)):
+		temp = (inc[i] + inc[i+1]) / 2.5
+		guess.append(temp)
+		i += 2
+
+	gaussian = lambda p, w, x: p[0]*np.exp(-(x - w*(1 + p[2]))**2 / (2*p[1]**2))
+	doubGaus = lambda p, rest1, rest2, x: gaussian([p[0],p[1],p[2]], rest1, x) + gaussian([p[0],p[1],p[2]], rest2, x)
+	combGaus = lambda p, rest1, rest2, x: doubGaus([p[0],p[1],p[2]], rest1, rest2, x) + doubGaus([p[3],p[4],p[5]], rest1, rest2, x)
+	residual = lambda p, rest1, rest2, x, y: y - (1 + combGaus(p, rest1, rest2, x))
+
+	redshift = lambda obs, emit: (obs / emit) - 1
+
+	w = sp.wave
+	f = sp.norm_flux
+
+	inc1 = np.where((w>inc[0]) & (w<inc[1]))
+	inc3 = np.where((w>inc[2]) & (w<inc[3]))
+	inc2 = np.where((w>inc[4]) & (w<inc[5]))
+	include = np.where((w>inc[0]) & (w<inc[5]))
+
+	wave1 = w[inc1]
+	flux1 = f[inc1]
+	wave2 = w[inc2]
+	flux2 = f[inc2]
+	wave3 = w[inc3]
+	flux3 = f[inc3]
+	wave = w[include]
+	flux = f[include]
+
+	x1 = np.array(wave1)
+	y1 = np.array(flux1)
+	x2 = np.array(wave2)
+	y2 = np.array(flux2)
+	x3 = np.array(wave3)
+	y3 = np.array(flux3)
+	x = np.array(wave)
+	y = np.array(flux)
+
+	wobs1 = 0
+	fmin1 = 134121324
+	for i in range(len(x1)):
+		if (y1[i] < fmin1):
+			fmin1 = y1[i]
+			wobs1 = x1[i]
+						
+	wobs2 = 0
+	fmin2 = 12341234
+	for i in range(len(x2)):
+		if (y2[i] < fmin2):
+			fmin2 = y2[i]
+			wobs2 = x2[i]
+			
+	z1 = redshift(wobs1, rest1)
+	z2 = redshift(wobs2, rest2)
+
+
+
+	p = [fmin1 - 1, guess[0], z1, fmin2 - 1, guess[1], z2]
+
+	p1, pcov, infodict, errmsg, success = optimize.leastsq(residual, p[:], args = (rest1, rest2, w, f), full_output = 1)
+
+	if (fit):
+		sp.wfit = np.linspace(min(w), max(w), len(w) * 10)
+		sp.comb = combGaus(p1, rest1, rest2, sp.wfit) + 1
+		sp.gausB = gaussian([p1[0], p1[1], p1[2]], rest2, sp.wfit) + 1
+		sp.gausC = gaussian([p1[3], p1[4], p1[5]], rest1, sp.wfit) + 1 
+		pa = [p1[0], p1[1], p1[2], p1[0], p1[1], p1[2]]
+		pb = [p1[3], p1[4], p1[5], p1[3], p1[4], p1[5]]
+		sp.doubA = doubGaus(pa, rest1, rest2, sp.wfit) + 1
+		sp.doubB = doubGaus(pb, rest1, rest2, sp.wfit) + 1
+		sp.sing = gaussian(pa[:3], rest1, sp.wfit) + gaussian(pb[:3], rest2, sp.wfit) + 1
+
+	if (len(w) > len(p)) and pcov is not None:
+		s_sq = (residual(p1, rest1, rest2, x3, y3)**2).sum()
+		pcov = pcov * s_sq / (len(w) - len(p))
+	else:
+		pcov = np.inf
+
+	errors = []
+	for j in range(len(p1)):
+		try:
+			errors.append(np.abs(pcov[j][j])**.5)
+		except:
+			errors.append(0.00)
+			
+	errors = np.array(errors)
+
+	error = []
+
+	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))	
+	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))	
+	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
+	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
+
+	eqws = []
+	eqws.append(np.abs(integrate.quad(lambda x: p1[0] * np.exp(-(x-rest1*(1+p1[2]))**2/(2*p1[1]**2)), min(x1), max(x2))[0]))
+	eqws.append(np.abs(integrate.quad(lambda x: p1[0] * np.exp(-(x-rest2*(1+p1[2]))**2/(2*p1[1]**2)), min(x1), max(x2))[0]))
+	eqws.append(np.abs(integrate.quad(lambda x: p1[3] * np.exp(-(x-rest1*(1+p1[5]))**2/(2*p1[4]**2)), min(x1), max(x2))[0]))
+	eqws.append(np.abs(integrate.quad(lambda x: p1[3] * np.exp(-(x-rest2*(1+p1[5]))**2/(2*p1[4]**2)), min(x1), max(x2))[0]))
+
+	return([eqws, error])	
 	
 #finds systematic errors for EQWs
-def monteCarlo(mc, sp, triplet = False):
+def monteCarlo(mc, sp, triplet = False, plot = False):
 	print "Finding error for", sp.name
 	spectra=[]
 	for i in range(mc):
 		nsp = spectrum()
+		nsp.sn = sp.sn
+		nsp.order = sp.order
+		nsp.bin = sp.bin
 		nsp.wave = sp.wave
 		nsp.flux = sp.flux
-		nsp.bkpts = randBreak(sp.bkpts)
+		nsp.var = (findErrors(nsp.flux)**-1)
+		if (sp.sn == '2012cg'):
+			nsp.bkpts = randBreak(sp.bkpts, 1.5)
+		else:
+			nsp.bkpts = randBreak(sp.bkpts)
 		nsp.inc = sp.inc
 		sp_flux, norm = interpolate(nsp, nsp.bkpts, True)
 		nsp.norm_flux = norm
 		nsp.sflux = sp_flux
-		nsp.cont_err = findErrors(nsp.flux, nsp.sflux)
-		findEqw(nsp,False)
+		#nsp.cont_err = findErrors(nsp.flux, nsp.sflux)
+		if (plot):
+			#plt.plot(nsp.wave, nsp.flux)
+			#plt.plot(nsp.wave, nsp.sflux)
+			#plt.xlim(2300, 2625)
+			#plt.ylim(0, .2e-14)
+			#temp = raw_input('sdf')
+			#plt.savefig(sp.dir + 'eqw/MonteCarlo/lines/b-spline' + sp.name + ', rand ' + str(i + 1) + '.png')
+			#plt.close()
+			findEqw(nsp, True)
+			plt.xlim(2300, 2900)
+			plt.ylim(0, 1.5)
+			plt.savefig(sp.dir + 'eqw/MonteCarlo/lines/' + sp.name + ', rand ' + str(i + 1) + '.png')
+			plt.close()
+		else:
+			findEqw(nsp,False)
 		if (triplet):
-			sepMgDoub(nsp)
+			sepMgDoub(nsp, False)
 		spectra.append(nsp)
 	
 	mc_lo_errs = []
@@ -532,7 +901,7 @@ def monteCarlo(mc, sp, triplet = False):
 		temp = []
 		for j in range(len(spectra)):
 			temp.append(spectra[j].eqws[i])
-		mc_lo, mc_hi = findErr(temp, sp.eqws[i], sp.name, sp.sn, ions[i])
+		mc_lo, mc_hi = findErr(temp, sp.eqws[i], sp.name, sp.dir, ions[i])
 		mc_lo_errs.append(mc_lo)
 		mc_hi_errs.append(mc_hi)
 	
@@ -555,23 +924,26 @@ def calcErr(sp):
 	sp.err_lo = err_lo
 	sp.err_hi = err_hi
 	
-	avg_err = []
-	for a in range(len(err_lo)):
-		avg_err.append(np.average([err_lo, err_hi]))
-	
-	chisq = []
-	for a in range(len(sp.chisq_sum)):
-		chisq.append(sp.chisq_sum[a] / avg_err[a])
-	sp.chisq = chisq
-	
 	t = Table([ions, sp.err_lo, sp.err_hi], names = ('col1','col2','col3'))
 	t.write('sn' + sp.sn + '/Data/eqw/errors/' + sp.name + '.flm', format='ascii')
 
+#Saves and loads optimized Gaussian parameters
+def saveParam(sp):
+	zeros = np.zeros(len(sp.param))
+	t = Table([sp.param, zeros], names = ('col1', 'col2'))
+	t.write(sp.dir + 'param/' + sp.name + '.dat', format = 'ascii')
+	
+def loadParam(sp):
+	t = Table.read(sp.dir + 'param/' + sp.name + '.dat', format='ascii')
+	sp.param = t["col1"]
+	
 #saves all data to FLM files
 def saveData(sp):
 	att = dir(sp)
 	if('inc' in att):
 		saveInc(sp)
+	if('param' in att):
+		saveParam(sp)
 	#write eqws and errors
 	attr = ()
 	i = 18
@@ -588,9 +960,7 @@ def saveData(sp):
 			attr = attr + (att[i],)
 		if ('err_hi' in att[i]) & ('err_hi' not in attr):
 			attr = attr + (att[i],)
-		if ('chisq' in att[i]) & ('chisq' not in attr):
-			attr = attr + (att[i],)
-		if ('dof' in att[i]) & ('dof' not in attr):
+		if ('sig3' in att[i]) & ('sig3' not in attr):
 			attr = attr + (att[i],)
 		i += 1
 	
@@ -611,6 +981,8 @@ def saveData(sp):
 			attr = attr + (att[i],)
 		if ('cont_err' in att[i]) & ('cont_err' not in attr):
 			attr = attr + (att[i],)
+		if ('var' in att[i]) & ('var' not in attr):
+			attr = attr + (att[i],)
 		if ('sflux' in att[i]) & ('sflux' not in attr):
 			attr = attr + (att[i],)
 		if ('norm_flux' in att[i]) & ('norm_flux' not in attr):
@@ -623,8 +995,33 @@ def saveData(sp):
 		
 	t = Table(values, names = attr)
 	t.write(sp.dir + 'spectra/' + sp.name + '.flm', format = 'ascii')
+	
+	try:
+		attr = ()
+		i = 18
+		while (i<len(att)):
+			if ('wfit' in att[i]) & ('wfit' not in attr):
+				attr = attr + (att[i],)
+			if ('comb' in att[i]) & ('comb' not in attr):
+				attr = attr + (att[i],)
+			if ('doubA' in att[i]) & ('doubA' not in attr):
+				attr = attr + (att[i],)
+			if ('doubB' in att[i]) & ('doubB' not in attr):
+				attr = attr + (att[i],)
+			if ('sing' in att[i]) & ('sing' not in attr):
+				attr = attr + (att[i],)
+			i += 1
+				
+		values = []
+		for j in range(len(attr)):
+			values.append(getattr(sp, attr[j]))
+		
+		t = Table(values, names = attr)
+		t.write(sp.dir + 'spectra/' + sp.name + '_fit.flm', format = 'ascii')
+	except ValueError as e:
+		print "No Fits"
 
-#loads any saved data from FLM files. Requires a directory
+#loads any saved data from FLM files. Requires a directory ("'Supernovae'/Data") ex. ('sn2011fe/Data')
 #Returns array of spectra with loaded data
 def loadData(dir):
 	spectra = []
@@ -634,23 +1031,101 @@ def loadData(dir):
 	for f in files:
 		sp = spectrum()
 		spNames(f, sp)
+		getSpectrum(f, sp)
+		try:
+			getBkpts(sp)
+		except IOError as e:
+			print "No Breakpoints"
+		try:
+			loadInc(sp)
+		except IOError as e:
+			print "No Include Values"
+		try:
+			loadParam(sp)
+		except IOError as e:
+			print "No Parameters Saved"
+			
 		file = sp.dir + 'spectra/' + sp.name + '.flm'
 		t = Table.read(file, format = 'ascii')
 		attr = t.colnames
 		for a in attr:
-			setattr(sp, a, t[a])
+			setattr(sp, a, t[a])	
 		file = sp.dir + 'eqw/' + sp.name + '.flm'
 		t = Table.read(file, format = 'ascii')
 		attr = t.colnames
 		for a in attr:
 			setattr(sp, a, t[a])
+		try:
+			file = sp.dir + 'spectra/' + sp.name + '_fit.flm'
+			t = Table.read(file, format = 'ascii')
+			attr = t.colnames
+			for a in attr:
+				setattr(sp, a, t[a])
+		except IOError as e:
+			print "No fits"
+		
 			
-		getBkpts(sp)
-		loadInc(sp)
 		spectra.append(sp)
 	
 	return spectra
 
+#Calculates the goodness of fit for each line via Chi-square tests
+def chiSq(spectra):
+	sort_sp = []
+	temp = 0
+	for s in spectra:
+		if s.visit < temp:
+			sort_sp.insert(len(sort_sp) - 1, s)
+		else:
+			sort_sp.append(s)
+			temp = s.visit
+	spectra = sort_sp
+	
+	eqws = []
+	for i in range(len(spectra[0].eqws)):
+		ion = []
+		for s in spectra:
+			ion.append(s.eqws[i])
+		eqws.append(ion)
+		
+	errs = []
+	for i in range(len(spectra[0].eqws)):
+		err = []
+		for s in spectra:
+			err.append(np.average([s.err_lo[i], s.err_hi[i]]))
+		errs.append(err)
+		
+	weights = []
+	for e in errs:
+		temp = []
+		for i in e:
+			temp.append(1/i**2)
+		weights.append(temp)
+		
+	deltaEqw = []
+	count = 0
+	for e in eqws:
+		avg = np.average(e, weights = weights[count])
+		temp = []
+		for i in e:
+			temp.append(i - avg)
+		deltaEqw.append(temp)
+		count += 1
+		
+	chisq = []
+	i = 0
+	for deqw in deltaEqw:
+		chisq_sum = 0
+		err = errs[i]
+		count = 0
+		for d in deqw:
+			chisq_sum += (d/err[count])**2
+			count += 1
+		chisq.append(chisq_sum)
+		i += 1
+		
+	return chisq
+	
 #Plots eqws for each spectrum in parameter array. Each species plotted in same subplot.
 def plotEqw(spectra):
 	#sorts spectra by epoch
@@ -707,20 +1182,20 @@ def plotEqw(spectra):
 			if s in i:
 				num += 1
 		spec_num.append(num)
-
+		
 	weights = []
 	for i in range(len(hi_err)):
 		var = []
 		for j in range(len(hi_err[i])):
 			avg = (lo_err[i][j] + hi_err[i][j]) / 2
 			var.append(1/avg**2)
-		weights.append(var)
+		weights.append(var)	
 		
 	stdDev = []
 	medErr = []
 		
 	font = {'family' : 'serif','color'  : 'black','weight' : 'bold','size' : 10,} 
-	colors = ['black', 'blue', 'cyan', 'green']
+	colors = ['black', 'blue', 'cyan', 'green', 'red', 'orange', 'yellow', 'purple', 'pink']
 		
 	fig = plt.figure(num = 5, dpi = 100, figsize = [10, (3*len(spec_num)) + 2], facecolor = 'w')
 	gs = gridspec.GridSpec(1,1)
@@ -734,7 +1209,7 @@ def plotEqw(spectra):
 		plt.gca().set_color_cycle(colors)
 		while (k < spec_num[j]):
 			ax.scatter(epochs, eqws[count], color = colors[k])
-			ax.errorbar(epochs, eqws[count], yerr = [lo_err[count], hi_err[count]], label = ions[count], linestyle = "None")
+			ax.errorbar(epochs, eqws[count], yerr = [lo_err[count], hi_err[count]], label = ions[count]) #, linestyle = "None")
 			k += 1
 			count += 1
 		ax.text(.5, .9, species[j], horizontalalignment = 'center', transform = ax.transAxes, fontdict = font)
@@ -765,7 +1240,7 @@ def plotEqw(spectra):
 		plt.gca().set_color_cycle(colors)
 		while (k < spec_num[j]):
 			ax.scatter(epochs, eqws[count] - np.average(eqws[count], weights = weights[count]), color = colors[k])
-			ax.errorbar(epochs, eqws[count] - np.average(eqws[count], weights = weights[count]), yerr = [lo_err[count], hi_err[count]], label = ions[count], linestyle = "None")
+			ax.errorbar(epochs, eqws[count] - np.average(eqws[count], weights = weights[count]), yerr = [lo_err[count], hi_err[count]], label = ions[count]) #, linestyle = "None")
 			k += 1
 			count += 1
 		ax.text(.5, .9, species[j], horizontalalignment = 'center', transform = ax.transAxes, fontdict = font)
@@ -803,86 +1278,286 @@ def plotEqw(spectra):
 	plt.savefig(spectra[0].dir + 'eqw/stddev_vs_mederr.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
 	plt.show()
 	
+#Plots Gaussian fits over a normalized continuum, the residual between the two, and parameter variation over time
+def testPlots(spectra):
+	for s in spectra:
+		sm1 = inter.splrep(s.wfit, s.comb)
+		comb = inter.splev(s.wave, sm1)
+		s.res = s.norm_flux - comb
+		
+	font = {'family' : 'serif','color'  : 'black','weight' : 'bold','size' : 10,} 
+	ticks = np.linspace(.55, 1.15, 13)
+	ticklabels = []
+	for t in ticks:
+		ticklabels.append(str(t))
+	
+	i = 1
+	for s in spectra:
+		fig = plt.figure(num = i, dpi = 100, figsize = [10,8], facecolor = 'w')
+		#plt.title(s.name, fontdict = font)
+		plt.gca().axes.get_xaxis().set_visible(False)
+		plt.gca().axes.get_yaxis().set_visible(False)
+		ax1 = fig.add_subplot(2, 1, 1)
+		ax1.plot(s.wave, s.norm_flux, color = 'k', linestyle = 'steps', linewidth = 3)
+		ind = np.where(s.comb < .99)
+		ax1.plot(s.wfit[ind], s.comb[ind], color = 'r', label = 'Combined Fit', linewidth = 2, linestyle = '--', drawstyle = 'steps')
+		ind = np.where(s.doubA < .99)
+		ax1.plot(s.wfit[ind], s.doubA[ind], color = 'g', label = 'Double Gauss A & B', linewidth = 2, linestyle = '--', drawstyle = 'steps')
+		ind = np.where(s.doubB < .99)
+		ax1.plot(s.wfit[ind], s.doubB[ind], color = '#ff8000', label = 'Double Gauss C & D', linewidth = 2, linestyle = '--', drawstyle = 'steps')
+		ind = np.where((s.wfit > 2792.8) & (s.wfit < 2802.85))
+		ax1.plot(s.wfit[ind], s.sing[ind], color = 'b', label = 'Single Gauss A & D', linewidth = 2, linestyle = '--', drawstyle = 'steps')
+		ind = np.where((s.wfit > 2811.13) & (s.wfit < 2821.09))
+		ax1.plot(s.wfit[ind], s.sing[ind], color = 'b', linewidth = 2, linestyle = '--', drawstyle = 'steps')
+		plt.xlim(2780, 2880)
+		plt.ylim(.5, 1.15)
+		ax1.set_xticklabels([])
+		ax1.hlines(1, 2780, 2880, linestyles = 'dashed')
+		ax1.set_yticks(ticks)
+		ax1.set_yticklabels(ticklabels)
+		plt.gca().axes.get_yaxis().set_visible(True)
+		plt.ylabel('Normalized Flux', fontdict = font)
+		plt.gca().yaxis.set_major_locator(MaxNLocator(prune='upper'))
+		
+		ax2 = fig.add_subplot(2, 1, 2)
+		ax2.plot(s.wave, s.res, color = 'k', linestyle = 'steps', linewidth = 3)
+		ax2.hlines(0, 2780, 2880, linestyles = 'dashed')
+		plt.xlim(2780, 2880)
+		plt.ylim(-.2, .2)
+		plt.gca().axes.get_yaxis().set_visible(True)
+		plt.ylabel('Residual', fontdict = font)
 
-"""
-exclude = [2789.67, 2826.71, 2843.33, 2878.64, 6025.46, 6344.41]
-include = [2785.68, 2800.03, 2800.03, 2812.02, 2812.03, 2822.5, 6040.96, 6316.41]
-guesses = [-.3, 2797.1, 3.4, -.45, 2807.77, 7.4, -.34, 2815.21, 4.2, -.6199, 6170.77, 119.02]
-ions = ['MgIIa', 'MgIIb', 'MgIIc', 'SiIIa']
-epochs = [.5023, 4.61405, 6.33734, 8.32473, 11.5869, 15.5064, 19.1053, 21.1529, 25.0071, 27.9399]
+		plt.gca().axes.get_yaxis().set_visible(True)
+		plt.xlabel('Wavelength', fontdict = font)
+		plt.subplots_adjust(hspace = 0, right = .8)
+		plt.savefig(s.dir + 'Pictures/norm_vs_res/norm_vs_res_' + str(i) + '.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+		i += 1
+		
+	heightMW = []
+	sigmaMW = []
+	redMW = []
+	heightHG = []
+	sigmaHG = []
+	redHG = []
+	epochs = []
+	for s in spectra:
+		p1 = s.param
+		heightMW.append(p1[0])
+		heightHG.append(p1[3])
+		sigmaMW.append(p1[1])
+		sigmaHG.append(p1[4])
+		redMW.append(p1[2])
+		redHG.append(p1[5])
+		epochs.append(s.epoch)
+		
+	fig = plt.figure(num = i, dpi = 100, figsize = [10,8], facecolor = 'w')
+	plt.title(s.sn, fontdict = font)
+	plt.gca().axes.get_xaxis().set_visible(False)
+	plt.gca().axes.get_yaxis().set_visible(False)
+	ax1 = fig.add_subplot(3, 1, 1)
+	ax1.scatter(epochs, heightMW - np.average(heightMW), color = 'k', label = 'Milky Way')
+	ax1.scatter(epochs, heightHG - np.average(heightHG), color = 'c', label = 'Host Galaxy')
+	legend = plt.legend(bbox_to_anchor = (1, 1), loc = 2, shadow = True, prop = {'family':'serif'})
+	ax1.set_xticklabels([])
+	plt.gca().axes.get_yaxis().set_visible(True)
+	plt.ylabel('Heights', fontdict = font)
+	plt.gca().yaxis.set_major_locator(MaxNLocator(prune='upper'))
 
-"""
-#13dy params (w/out SiII)
-exclude = [2789.67, 2826.71, 2843.33, 2878.64]
-include = [2790.72, 2799.98, 2799.99, 2811.93, 2811.94, 2822.54]
-guesses = [-.3, 2797.1, 3.4, -.45, 2807.77, 7.4, -.34, 2815.21, 4.2]
-ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId']
-epochs = {'visit1': .5023, 'visit2': 4.61405, 'visit3':  6.33734, 'visit4':  8.32473, 'visit5':  11.5869, 'visit6':  15.5064, 'visit7':  19.1053, 'visit8':  21.1529, 'visit9':  25.0071, 'visit10':  27.9399}
-"""
-files = glob.glob('sn2013dy/Data/data/*.flm')
-spectra = []
-for f in files:
-	sp = spectrum()
-	spNames(f, sp)
-	getSpectrum(f, sp)
-	getBkpts(sp)
-	findEqw(sp, False)
-	spectra.append(sp)
+	ax2 = fig.add_subplot(3, 1, 2)
+	ax2.scatter(epochs, sigmaMW - np.average(sigmaMW), color = 'b', label = 'Milky Way')
+	ax2.scatter(epochs, sigmaHG - np.average(sigmaHG), color = 'g', label = 'Host Galaxy')
+	legend = plt.legend(bbox_to_anchor = (1, 1), loc = 2, shadow = True, prop = {'family':'serif'})
+	ax2.set_xticklabels([])
+	plt.gca().axes.get_yaxis().set_visible(True)
+	plt.ylabel('Widths', fontdict = font)
+	plt.gca().yaxis.set_major_locator(MaxNLocator(prune='upper'))
+	
+	ax3 = fig.add_subplot(3, 1, 3)
+	ax3.scatter(epochs, redMW - np.average(redMW), color = 'g', label = 'Milky Way')
+	ax3.scatter(epochs, redHG - np.average(redHG), color = '#ff8000', label = 'Host Galaxy')
+	legend = plt.legend(bbox_to_anchor = (1, 1), loc = 2, shadow = True, prop = {'family':'serif'})
+	plt.ylabel('Redshifts', fontdict = font)
 
+	plt.gca().axes.get_yaxis().set_visible(True)
+	plt.xlabel('Epochs', fontdict = font)
+	plt.subplots_adjust(hspace = 0, right = .8)
+	plt.savefig(s.dir + 'Pictures/hwr/hwr_' + s.sn + '.png', dpi = 600, facecolor = 'w', edgecolor = 'w', pad_inches = .1)
+	i += 1
 
-#11fe params
+#Helper function that scales 2 continuum's with user input
+def scaleFlux(s1, s2):
+	print s1.name + '-' + s2.name
+	plt.figure()
+	plt.plot(s1.wave, s1.flux)
+	plt.plot(s2.wave, s2.flux)
+	cont = True
+	while(cont):
+		scale = raw_input('Input scale factor: ')
+		scale = float(scale)
+		for i in range(len(s1.flux)):
+			s1.flux[i] *= scale
+		plt.figure()
+		plt.plot(s1.wave, s1.flux)
+		plt.plot(s2.wave, s2.flux)
+		c = True
+		while(c):
+			temp = raw_input('Try another scale factor? (y/n): ')
+			if (temp == 'y'):
+				c = False
+				cont = True
+			elif(temp == 'n'):
+				c = False
+				cont = False
+			else:
+				c = True
+				cont = True
 
-exclude = [2341.34, 2350.47, 2372.48, 2390.04, 2583.58, 2607.58, 2789.51, 2813.78, 2848.5, 2862.16]
-include = [2340.35, 2353.69, 2371.61, 2379.75, 2380, 2390.5, 2581.61, 2593.2, 2597.06, 2607.95, 2786.39, 2801.95, 2802, 2815.82, 2848.86, 2860.93]
-guesses = [-.3675, 2345, 3.7, -.205, 2375.98, 3.62, -.466, 2385.51, 3.99, -.3563, 2588.31, 4.5, -.464, 2602, 4.4, -.6416, 2798.05, 4.37, -.596, 2806.09, 4.1, -.1342, 2854.61, 4.29]
-ions=['FeIIa','FeIIb','FeIIc','MnIIa','MnIIb','MgIIa','MgIIb','MgIa']
-epochs = {'visit1': -13.110599,'visit2': -10.041886, 'visit3': -6.9081770, 'visit4': -2.9512300, 'visit5': 0.039233502, 'visit6': 3.2484383, 'visit7-obs1': 9.1496879, 'visit7-obs2+3': 9.1496879, 'visit8': 20.687449, 'visit9': 26.685855, 'visit10': 40.447814}
+#Allows user to scale two spectra to analyse absorption features
+def scaledPlots(spectra):
+	i = 0
+	while(i < len(spectra) - 1):
+		s = spectra[i]
+		sp = spectra[i + 1]
+		scaleFlux(s, sp)
+		i += 1
+	
+#Creates profile plots to double check variability in lines if detected in EQW measurements
+def proPlot(spectra):
+	sort_sp = []
+	temp = 0
+	for s in spectra:
+		if s.visit < temp:
+			sort_sp.insert(len(sort_sp) - 1, s)
+		else:
+			sort_sp.append(s)
+			temp = s.visit
+	spectra = sort_sp
+	
+	i = 0
+	while (i < len(spectra) - 1):
+		s1 = spectra[i]
+		s2 = spectra[i+1]
+		t = s1.name + '-' + s2.name
+		print t
+		j = 0
+		k = 0
+		while (j < len(s1.inc) - 1):
+			plt.figure()
+			plt.title(t + ': ' + ions[k])
+			plt.plot(s1.wave, s1.norm_flux, label = s1.name, linestyle = 'steps')
+			plt.plot(s2.wave, s2.norm_flux, label = s2.name, linestyle = 'steps')
+			plt.xlim(s1.inc[j] - 20, s1.inc[j+1] + 20)
+			plt.ylim(.4, 1.2)
+			legend = plt.legend(loc = 'upper right')
+			plt.savefig('sn' + s1.sn + '/Data/Pictures/' + ions[k] + '-' + t + '.png')
+			plt.close()
+			j += 2
+			k += 1
+		i += 1
+		
+#Allows user to select the SN to work with (initializes initial parameters)
+def pickSN():
+	cont = True
 
-#dir = 'sn2011fe/Data'
-#spectra = loadData(dir)
+	while(cont):	
+		sn = raw_input('Choose Supernovae (92a, 11by, 11ek, 11fe, 11iv, 12cg, 13dy, 14j): ')
 
+		if (sn == '92a'):
+			#92a params
+			exclude = [2795.6, 2815.67]
+			ions = []
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe','MgIIa','MgIIb','MgIa']
+			epochs = {'visit1':4.98, 'visit2': 44.83, 'visit3': 289.58}
+			order5 = []
+			bins = {1:17, 2:17, 3:17}
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '11by'):
+			"""
+			#11by params (all lines)
+			exclude = [2343.46, 2359.02, 2381.05, 2398.43,2379.71, 2397.94, 2791.84, 2822.68, 2847.22, 2870.18]
+			include = [2344.07, 2355.18, 2381.25, 2386.91, 2389.33, 2395.6, 2381.44, 2386.43, 2389.35, 2395.58, 2793.1, 2800.65, 2800.66, 2809.46, 2809.47, 2816.07, 2850.05, 2858.23, 2858.24, 2865.78]
+			ions = ['FeIIa', 'FeIIb', 'FeIIc', 'FeIId', 'MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa', 'MgIb']
+			epochs = {'visit1': 1, 'visit2': 2}
+			setGlobals(exclude, include, ions, epochs)
+			"""
 
-#!!!example code!!!
-#Reads in existing calculations and plots them
-#dir = 'sn2011fe/Data'
-#spectra = loadData(dir)
-#plotEqw(spectra)
+			#11by params 
+			exclude = [2340.51, 2359.91, 2375.76, 2405.27, 2579.76, 2617.5, 2788.53, 2822.68, 2849.89, 2869.55]
+			ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa', 'MgIb']
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe']
+			epochs = {'visit1': -9.31, 'visit2': -0.52}
+			order5 = [1]
+			bins = {1:17, 2:17}
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '11ek'):
+			#11ek params
+			exclude = [2802.45, 2823.52]
+			ions = []
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe','MgIIa','MgIIb','MgIa']
+			epochs = {'visit1': -3.32, 'visit2': 3.53}
+			order5 = []
+			bins = {1:17, 2:17}
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '11fe'):
+			#11fe params
+			exclude = [2326.78, 2355.43, 2365.27, 2392.99, 2578.82, 2610.51, 2785.4, 2814.42, 2846.31, 2860.45]
+			#exclude = [2341.34, 2350.47, 2372.48, 2390.04, 2583.58, 2607.58, 2789.51, 2813.78, 2848.5, 2862.16]
+			ions = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe','MgIIa','MgIIb','MgIa']
+			epochs = {'visit1': -13.110599,'visit2': -10.041886, 'visit3': -6.9081770, 'visit4': -2.9512300, 'visit5': 0.039233502, 'visit6': 3.2484383, 'visit7': 9.1496879, 'visit8': 20.687449, 'visit9': 26.685855, 'visit10': 40.447814}
+			order5 = [6]
+			bins = {1:17, 2:17, 3:17, 4:17, 5:17, 6:17, 7:17, 8:17, 9:17, 10:17} 
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '11iv'):
+			#11iv params	
+			exclude = [2791.63, 2812.83]
+			ions = ['MgIIa', 'MgIIb']
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe','MgIIa','MgIIb','MgIa']
+			epochs = {'visit1': .6, 'visit2': 5.41, 'visit3': 10.15, 'visit4': 13.99, 'visit5': 17.82, 'visit6': 21.72, 'visit7': 29.52}
+			order5 = []
+			bins = {1:17, 2:17, 3:17, 4:17, 5:17, 6:17, 7:17} 
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '12cg'):
+			#12cg params
+			exclude = [2790.48, 2818.01, 2847.22, 2869.38]
+			ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa']
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe']
+			epochs = {'visit1': 2.5, 'visit2':16.37}
+			order5 = []
+			bins = {1:17, 2:17}
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '13dy'):
+			
+			#13dy params (w/out SiII)
+			exclude = [2329.22, 2364, 2371.27, 2402.09, 2575, 2622, 2789.67, 2826.71, 2843.33, 2878.64]
+			ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa', 'MgIb']
+			ionsLim = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId']
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe']
+			epochs = {'visit1': -6.17, 'visit2': -2.09, 'visit3':  -0.37, 'visit4':  1.61, 'visit5':  4.85, 'visit6':  8.76, 'visit7':  12.36, 'visit8':  14.38, 'visit9':  18.22, 'visit10':  21.17}
+			order5 = [3, 10]
+			bins = {1:10, 2:10, 3:10, 4:10, 5:17, 6:10, 7:10, 8:12, 9:17, 10:10} 
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		elif(sn == '14j'):
+			#14j params
+			exclude = [2791.63, 2812.83, 2846.1, 2864.73]
+			ions = ['MgIIa', 'MgIIb', 'MgIa']
+			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe']
+			epochs = {'visit1': -6.4956025 , 'visit2': -4.4969556, 'visit3':  -2.4983087, 'visit4':  -0.49966173 , 'visit5':  2.4983087, 'visit6':  6.4956025, 'visit7':  8.4942495, 'visit8':  11.492220 , 'visit9':  14.490190, 'visit10':  24.052866}	
+			order5 = [9]
+			bins = {1:17, 2:17, 3:17, 4:17, 5:17, 6:17, 7:17, 8:17, 9:17, 10:17} 
+			setGlobals(exclude, ions, epochs, order5, bins)
+			cont = False
+		else:
+			continue
+			
+exclude = []
+ions = []
+epochs = {}
 
-
-
-#Finds the equivalent widths and total error for the lines in visit1
-file = 'sn2011fe/Data/data/sn2011fe-visit1-uv.flm'
-sp = spectrum()
-spNames(file, sp)
-getSpectrum(file, sp)
-getBkpts(sp)
-findEqw(sp, False)
-monteCarlo(5, sp)
-calcErr(sp)
-
-#Finds the equivalent widths and total error for the lines in every visit for 11fe
-files = glob.glob('sn2011fe/Data/data/*.flm')
-spectra = []
-for f in files:
-	sp = spectrum()
-	spNames(f, sp)
-	getSpectrum(f, sp)
-	getBkpts(sp)
-	findEqw(sp, False)
-	monteCarlo(500, sp)
-	calcErr(sp)
-	saveData(sp)
-	spectra.append(sp)
-
-plotEqw(spectra)
-
-
-# 13dy params
-exclude13 = [2785,2826,2843,2874,2964,3036,3113,3354,3580,4044,4188,4516,4800,5144,5953,6339]
-exclude = [2789.67, 2826.71, 2843.33, 2878.64]
-include = [2790.72, 2799.98, 2799.99, 2811.93, 2811.94, 2822.54]
-2811.94-> 2807, 2800 -> 2807.5
-guesses = [-.3, 2797.1, 3.4, -.45, 2807.77, 7.4, -.34, 2815.21, 4.2]
-ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'SiIIa']
-epochs = [.5023, 4.61405, 6.33734, 8.32473, 11.5869, 15.5064, 19.1053, 21.1529, 25.0071, 27.9399]
-"""
+rests = [2344.2128, 2374.4601, 2382.7641, 2586.6494, 2600.1722, 2796.354, 2803.5311, 2852.9628]
