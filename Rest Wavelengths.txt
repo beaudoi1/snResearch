@@ -1,0 +1,10 @@
+Rest Wavelengths
+
+FeII a- 2344.2128
+FeII b- 2374.4601
+FeII c- 2382.7641
+FeII d- 2586.6494
+FeII e- 2600.1722
+MgII a- 2796.354
+MgII b- 2803.5311
+MgI a- 2852.9628

@@ -69,7 +69,7 @@ sns = []
 ews = []
 lo = []
 hi = []
-for v in vales:
+for v in values:
 	sns.append(v[0])
 	ews.append(v[1])
 	lo.append(v[2])
