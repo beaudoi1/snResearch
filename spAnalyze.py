@@ -26,16 +26,17 @@
 #	saveInc(spectrum)	Sets, saves, or loads values that determine the wavelength ranges to include in Equivalent Width measurements
 #	loadInc(spectrum)
 #	setInc(spectrum)	
-#	interpolate(spectrum, breakpoints, randomize = False)	Helper function for breakpoint functions which calculates normalized spectrum
+#	interpolate(spectrum, breakpoints)	Helper function for breakpoint functions which calculates normalized spectrum
 #	spNames(file, spectrum)		Records name, supernova, directory, and visit for spectrum
 # 	savgol(flux, window_size, order, deriv = 0, rate = 1)	helper function to findErrors()
 # 	findErrors(flux)	finds noise error in spectrum	
 # 	getSpectrum(file, spectrum)		Gets spectrum from FLM file
-# 	findNewBkpts(spectrum)		Finds and records new breakpoints and records normalized spectrum
-#	getBkpts(spectrum)		retrieves previously calculated breakpoints from FLM files and records normalized spectrum
-#	addBkpts(spectrum)		adds and records new and previously calculate breakpoints
+# 	findNewBkpts(spectrum, linsp = False)		Finds and records new breakpoints and records normalized spectrum
+#	getBkpts(spectrum, linsp = False)		retrieves previously calculated breakpoints from FLM files and records normalized spectrum
+#	addBkpts(spectrum, linsp = False)		adds and records new and previously calculate breakpoints
 #	rmvBkpts(spectrum, range_minimum, range_maximum)		removes breakpoints between a specified range
-# 	randBreak(breakpoints, shift = 2.5)		helper function to monteCarlo(), randomizes breakpoints for variation in EQWs	
+# 	saveBkpts(spectrum)		save breakpoints
+#	randBreak(breakpoints, shift = 2.5)		helper function to monteCarlo(), randomizes breakpoints for variation in EQWs	
 #	sigma3(spectrum, rest_wave, redshift = .01)		inds signal-to-noise 3 sigma limits for a given spectrum
 # 	getLimits(spectrum, rest_wave, height, sigma, redshift = .01, plots = False)		Finds signal-to-noise limits for a given spectrum
 # 	findEqw(spectrum, plot = False)		find EQWs for lines in spectrum sp	
@@ -67,6 +68,7 @@ from numpy import linspace
 import scipy.interpolate as inter
 from scipy import optimize
 from scipy import integrate	
+from scipy.stats import chi2
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import MaxNLocator
@@ -74,6 +76,7 @@ import glob
 import sys
 import math
 from math import factorial
+import operator
 
 #initializes spectrum class
 class spectrum(object):
@@ -92,19 +95,21 @@ def initSpec(f):
 #param array ep- Epochs of each visit. Ex. {'visit1': 0.111, ...}
 #param array ord- Orders of each visit for b-spline creation
 #param array bin- Size of wavelength bins for b-spline creation
-def setGlobals(ex, i, ep, ord, bin, sigI):
+def setGlobals(ex, i, ep, ord, bin, sigI, lsp):
 	global exclude
 	global ions
 	global epochs
 	global order5
 	global bins
 	global sigIons
+	global linsp
 	exclude = ex
 	ions = i
 	epochs = ep
 	order5 = ord
 	bins = bin
 	sigIons = sigI
+	linsp = lsp
 
 #Sets, saves, or loads values that determine the wavelength ranges to include in Equivalent Width measurements
 def saveInc(sp):
@@ -121,36 +126,60 @@ def setInc(sp):
 	sp.inc = inc
 	
 #Helper function for breakpoint functions which calculates normalized spectrum
-def interpolate(sp, bp, rand = False, linsp = False):
+def interpolate(sp, bp):
 	bp.sort()
 	x = sp.wave
 	y = sp.flux
-	#remove absorption lines from spectrum
-	lines = np.append([], np.where(x<exclude[0])[0])
-	lines = [int(i) for i in lines]
-	i = 1
-	while (i<len(exclude)-1):
-		lines = np.append(lines, np.where((x>exclude[i]) & (x<exclude[i+1]))[0])
-		i += 2	
-	lines = np.append(lines, np.where(x>exclude[len(exclude)-1])[0])
 	
-	#create b-spline over spectrum
-	m = len(y)
-	s = (m-  np.sqrt(2 * m), m + np.sqrt(2 * m))
-	sm1 = inter.splrep(x[lines],y[lines], w = sp.var[lines], k = sp.order, s = s[1])
+	#remove absorption lines from spectrum
+	"""
+	if (linsp == False):
+		exclude = []
+		"""
+	
 	if (linsp):
-		xx = np.linspace(min(x), max(x), round(len(x) / sp.bin, 0))
+		lines = np.append([], np.where(x<exclude[0])[0])
+		lines = [int(i) for i in lines]
+		i = 1
+		while (i<len(exclude)-1):
+			lines = np.append(lines, np.where((x>exclude[i]) & (x<exclude[i+1]))[0])
+			i += 2	
+		lines = np.append(lines, np.where(x>exclude[len(exclude)-1])[0])
+		
+		#create b-spline over spectrum
+		m = len(y)
+		s = (m-  np.sqrt(2 * m), m + np.sqrt(2 * m))
+		sm1 = inter.splrep(x[lines],y[lines], w = sp.var[lines], k = sp.order, s = s[1])
+		
+		xx = np.linspace(min(x), max(x), round(len(x) / sp.bin, 0))		
+		
+		linesxx = np.append([], np.where(xx<exclude[0])[0])
+		linesxx = [int(i) for i in linesxx]
+		i = 1
+		while(i<len(exclude)-1):
+			linesxx = np.append(linesxx, np.where((xx>exclude[i]) & (xx<exclude[i+1]))[0])
+			i += 2	
+		linesxx = np.append(linesxx, np.where(xx>exclude[len(exclude)-1])[0])
+		xx = xx[linesxx]
+		xx = np.append(xx,bp)
+		
 	else:
-		xx = np.append([], linspace(min(x), 2000, round(len(np.where(x < 2000)[0]) / sp.bin, 0)))
+		m = len(y)
+		s = (m-  np.sqrt(2 * m), m + np.sqrt(2 * m))
+		sm1 = inter.splrep(x,y, w = sp.var, k = sp.order, s = s[1])
+		xx = np.append([], np.linspace(min(x), 2000, round(len(np.where(x < 2000)[0]) / sp.bin, 0)))
 		xx = np.append(xx, bp)
-		xx = np.append(xx, linspace(3000, max(x), round(len(np.where(x > 3000)[0]) / sp.bin, 0)))
+		xx = np.append(xx, np.linspace(3000, max(x), round(len(np.where(x > 3000)[0]) / sp.bin, 0)))
 		xx = np.array(xx)
 	
+	""""
 	if (rand):
-		shift = .5
+		shift = 1.5
 		if (sp.sn == '1992A'):
 			shift = 1
 		if ((sp.sn == '2011fe') & (sp.visit == 1)):
+			shift = .25
+		if (sp.sn == '2013dy'):
 			shift = .25
 		xx = [i + np.random.normal(0, .68, 1)[0] * shift for i in xx]
 		indecies = []
@@ -164,24 +193,9 @@ def interpolate(sp, bp, rand = False, linsp = False):
 			i += 1
 			j += 1
 		xx = np.delete(xx, indecies)
-	
-	if linsp:
-		linesxx = np.append([], np.where(xx<exclude[0])[0])
-		linesxx = [int(i) for i in linesxx]
-		i = 1
-		while(i<len(exclude)-1):
-			linesxx = np.append(linesxx, np.where((xx>exclude[i]) & (xx<exclude[i+1]))[0])
-			i += 2	
-		linesxx = np.append(linesxx, np.where(xx>exclude[len(exclude)-1])[0])
-		xx = xx[linesxx]
-	
+	"""
 	
 	xx.sort()
-	
-	#add breakpoints to b-spline
-	if(linsp):
-		xx = np.append(xx,bp)
-		xx.sort()
 	
 	#fits b-spline over wavelength range
 	y1 = inter.splev(xx,sm1)
@@ -268,27 +282,57 @@ def getSpectrum(file, sp):
 	sp.flux = data["col2"]
 
 #Finds and records new breakpoints and records normalized spectrum
-def findNewBkpts(sp, linsp = False):
+def findNewBkpts(sp):
+	global linsp
+	""""
+	if (sp.visit == 1) & (sp.sn == '2013dy'):
+		linsp = True
+	"""
+	if (sp.sn == '2014J') & (sp.visit < 4):
+		linsp = True
+	if (sp.sn == '2014J') & (sp.visit == 10):
+		linsp = True
 	x = sp.wave
 	y = sp.flux
 	sp.var = findErrors(y)**-1
 	k = 1
-	sflux = 0
+	xmin1, xmax1, ymin1, ymax1 = 2000, 3000, 0, -1
+	xmin2, xmax2, ymin2, ymax2 = 2000, 3000, 0, -1
 	while(k == 1):
 		points = input('Breakpoints for ' + sp.name + ': ')
+		points = set(points)
 		bps = [float(i) for i in points]
-		sp_flux, norm = interpolate(sp, bps, False, linsp)
-		plt.figure(1)
-		plt.plot(x, y)
-		plt.plot(x, sp_flux)
+		sp_flux, norm = interpolate(sp, bps)
+		fig1 = plt.figure(1)
+		fig1.clf()
+		plt.plot(x, y, color = 'k')
+		plt.plot(x, sp_flux, color = 'b')
+		ax1 = plt.gca()
+		if (ymax1 > 0):
+			ax1.set_xlim([xmin1, xmax1])
+			ax1.set_ylim([ymin1, ymax1])
 		plt.show()
-		plt.figure(2)
-		plt.plot(x, norm)
-		plt.ylim(0,1.5)
+		fig2 = plt.figure(2)
+		fig2.clf()
+		plt.plot(x, norm, linewidth = 2, color = 'k')
+		ax2 = plt.gca()
+		if (ymax2 > 0):
+			ax2.set_xlim([xmin2, xmax2])
+			ax2.set_ylim([ymin2, ymax2])
+		#plt.ylim(0,1.5)
 		plt.show()
+		#plt.ion()
 		t = True
 		while(t):
 			cont = raw_input('More breakpoints?: (y/n) ')
+			xmin1, xmax1 = ax1.get_xlim()
+			ymin1, ymax1 = ax1.get_ylim()
+			xmin2, xmax2 = ax2.get_xlim()
+			ymin2, ymax2 = ax2.get_ylim()
+			if (plt.fignum_exists(1) == False):
+				ymax1 = -1
+			if (plt.fignum_exists(2) == False):
+				ymax2 = -1
 			if (cont == 'y'):
 				t = False
 			elif (cont == 'n'):
@@ -300,43 +344,82 @@ def findNewBkpts(sp, linsp = False):
 			else:
 				continue
 	
-	temp = np.zeros(len(sp.bkpts))
-	t = Table([sp.bkpts, temp], names = ('col1','col2'))
+	t = Table([sp.bkpts], names = ('col1',))
 	t.write('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format='ascii')
 
 #retrieves previously calculated breakpoints from FLM files and records normalized spectrum
-def getBkpts(sp, linsp = False):
+def getBkpts(sp):
+	global linsp
+	"""
+	if (sp.visit == 1) & (sp.sn == '2013dy'):
+		linsp = True
+	"""
+	if (sp.sn == '2014J') & (sp.visit < 4):
+		linsp = True
+	if (sp.sn == '2014J') & (sp.visit == 10):
+		linsp = True
 	t = Table.read('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format='ascii')
 	sp.bkpts = t["col1"]
 	sp.var = (findErrors(sp.flux)**-1)
-	sp_flux, norm = interpolate(sp, sp.bkpts, False, linsp)
+	sp_flux, norm = interpolate(sp, sp.bkpts)
 	sp.norm_flux = norm
 	sp.sflux = sp_flux
 
 #adds and records new and previously calculate breakpoints
-def addBkpts(sp, linsp = False):
+def addBkpts(sp):
+	global linsp
+	"""
+	if (sp.visit == 1) & (sp.sn == '2013dy'):
+		linsp = True
+	"""
+	if (sp.sn == '2014J') & (sp.visit < 4):
+		linsp = True
+	if (sp.sn == '2014J') & (sp.visit == 10):
+		linsp = True
 	x = sp.wave
 	y = sp.flux
 	sp.var = findErrors(y)**-1
 	k = 1
+	xmin1, xmax1, ymin1, ymax1 = 2000, 3000, 0, -1
+	xmin2, xmax2, ymin2, ymax2 = 2000, 3000, 0, -1
 	sflux = 0
 	while(k == 1):
 		points = input('Breakpoints for ' + sp.name + ': ')
+		points = set(points)
 		bps = [float(i) for i in points]
 		bps = np.append(bps, sp.bkpts)
-		bps.sort()
-		sp_flux, norm = interpolate(sp, bps, False, linsp)
-		plt.figure(1)
-		plt.plot(x, y)
-		plt.plot(x, sp_flux)
+		bps = set(bps)
+		bps = [b for b in bps]
+		sp_flux, norm = interpolate(sp, bps)
+		fig1 = plt.figure(1)
+		fig1.clf()
+		plt.plot(x, y, color = 'k')
+		plt.plot(x, sp_flux, color = 'b')
+		ax1 = plt.gca()
+		if (ymax1 > 0):
+			ax1.set_xlim([xmin1, xmax1])
+			ax1.set_ylim([ymin1, ymax1])
 		plt.show()
-		plt.figure(2)
-		plt.plot(x, norm)
-		plt.ylim(0,1.5)
+		fig2 = plt.figure(2)
+		fig2.clf()
+		plt.plot(x, norm, color = 'k')
+		ax2 = plt.gca()
+		if (ymax2 > 0):
+			ax2.set_xlim([xmin2, xmax2])
+			ax2.set_ylim([ymin2, ymax2])
+		#plt.ylim(0,1.5)
 		plt.show()
 		t = True
 		while(t):
 			cont = raw_input('More breakpoints?: (y/n) ')
+			xmin1, xmax1 = ax1.get_xlim()
+			ymin1, ymax1 = ax1.get_ylim()
+			xmin2, xmax2 = ax2.get_xlim()
+			ymin2, ymax2 = ax2.get_ylim()
+			if (plt.fignum_exists(1) == False):
+				ymax1 = -1
+			if (plt.fignum_exists(2) == False):
+				ymax2 = -1
 			if (cont == 'y'):
 				t = False
 			elif (cont == 'n'):
@@ -348,8 +431,7 @@ def addBkpts(sp, linsp = False):
 			else:
 				continue
 	
-	temp = np.zeros(len(sp.bkpts))
-	t = Table([sp.bkpts, temp], names = ('col1','col2'))
+	t = Table([sp.bkpts], names = ('col1',))
 	t.write('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format='ascii')
 	
 #removes breakpoints between a specified range
@@ -364,39 +446,21 @@ def rmvBkpts(sp, min, max):
 	x = sp.wave
 	y = sp.flux
 	
-	sp.bkpts.sort()
-	imin = 0
-	imax = 0
-	count = 0
-	mincont = True
-	maxcont = True
-	for b in sp.bkpts:
-		if(mincont & (b > min)):
-			imin = count
-			mincont = False
-		if(maxcont & (b > max)):
-			imax = count - 1
-			maxcont = False
-		count += 1
-		
-	if len(sp.bkpts[imin:imax]) > 1:
-		temp = []
-		for i in range(len(sp.bkpts[imin:imax])):
-			temp.append(-1)
-		sp.bkpts[imin:imax] = temp
-	elif len(sp.bkpts[imin:imax]) == 1:
-		sp.bkpts[imin:imax] = -1
-	else:
-		return 'No breakpoints in given interval [' + str(min) + ', ' + str(max) + ']'
-	
-	sp.bkpts.sort()
+	sp.bkpts.sort() 
 	temp = []
 	for b in sp.bkpts:
-		if b >= 0:
+		if (b < min) | (b > max):
 			temp.append(b)
-			
+						
 	sp.bkpts = temp
+	sp.bkpts.sort()
+	sp.bkpts = np.array(sp.bkpts)
 	
+#saves breakpoints
+def saveBkpts(sp):
+	t = Table([sp.bkpts], names = ('col1',))
+	t.write('sn' + sp.sn + '/Data/breakpoints/' + sp.name + '.flm', format = 'ascii')
+
 #helper function to monteCarlo(), randomizes breakpoints for variation in EQWs	
 def randBreak(breakpoints, shift = 2.5):
 	bkpts = []
@@ -609,7 +673,7 @@ def findEqw(sp, plot = False):
 			
 		errors = np.array(errors)
 		
-		error = np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[2])**2 + (errors[2]*p1[0])**2))
+		error = np.sqrt(2 * math.pi) * (errors[0]*p1[2] + errors[2]*p1[0])
 		
 		if(plot):
 			for j in range(len(gaus)):
@@ -648,30 +712,32 @@ def findEqw(sp, plot = False):
 	sp.param = param
 
 #helper function to monteCarlo() which calculates standard deviations	
-def findErr(temp, original, name, dir, ion):
-	eqws = temp
+def findErr(eqws, original, name, dir, ion):
 	eqws.sort()
 	n = len(eqws)
 	
 	err_lo = eqws[int(round(.16*n))]
 	err_hi = eqws[int(round(.84*n))]
 	med = np.median(eqws)
+	mean = np.mean(eqws)
 	
 	mc_lo = med - err_lo
 	mc_hi = err_hi - med
 	
-	plt.figure(0)
+	plt.figure()
 	hist,bins=np.histogram(eqws,bins=len(eqws)/2)
 	width=.7*(bins[1]-bins[0])
 	center=(bins[:-1]+bins[1:])/2
 	plt.bar(center,hist,align='center',width=width)
 	plt.plot([err_lo],[2], 'go', label='err_lo')
 	plt.plot([err_hi],[2],'co',label='err_hi')
-	plt.plot([med],[2],'ko', label='median')
+	plt.plot([med],[2],'yo', label='median')
+	plt.plot([mean], [2], 'mo', label = 'mean')
 	plt.plot([original],[2],'ro', label='original')
 	legend=plt.legend(loc='upper right')
 	plt.savefig(dir + 'eqw/MonteCarlo/Histograms/MCHist' + name + '-' + ion + '.png',orientation='landscape')
-	plt.close()
+	plt.show()
+	#plt.close()
 	
 	return mc_lo, mc_hi
 	
@@ -767,10 +833,10 @@ def sepMgDoub(sp, fit = True):
 
 	error = []
 	
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
+	error.append(np.sqrt(2 * math.pi) * (errors[0]*p1[1] + errors[1]*p1[0]))
+	error.append(np.sqrt(2 * math.pi) * (errors[0]*p1[1] + errors[1]*p1[0]))
+	error.append(np.sqrt(2 * math.pi) * (errors[4]*p1[3] + errors[3]*p1[4]))
+	error.append(np.sqrt(2 * math.pi) * (errors[4]*p1[3] + errors[3]*p1[4]))
 	
 	eqws = []
 	eqws.append(np.abs(integrate.quad(lambda x: p1[0] * np.exp(-(x-rest1*(1+p1[2]))**2/(2*p1[1]**2)), min(x1), max(x2))[0]))
@@ -778,17 +844,22 @@ def sepMgDoub(sp, fit = True):
 	eqws.append(np.abs(integrate.quad(lambda x: p1[3] * np.exp(-(x-rest1*(1+p1[5]))**2/(2*p1[4]**2)), min(x1), max(x2))[0]))
 	eqws.append(np.abs(integrate.quad(lambda x: p1[3] * np.exp(-(x-rest2*(1+p1[5]))**2/(2*p1[4]**2)), min(x1), max(x2))[0]))
 
-	count = len(sp.eqws)
 	oldEqws = sp.eqws
 	newEqws = eqws
 	newEqws = [float(n) for n in newEqws]
-	oldEqws[len(oldEqws) - 5: len(oldEqws) - 2] = newEqws
+	if ('MgIb' in ions): 
+		oldEqws[len(oldEqws) - 5: len(oldEqws) - 2] = newEqws
+	else:
+		oldEqws[len(oldEqws) - 4: len(oldEqws) - 1] = newEqws
 	
 	
 	oldErr = sp.eqw_errs
 	newErr = error	
 	newErr = [float(n) for n in newErr]
-	oldErr[len(oldErr) - 5: len(oldErr) - 2] = newErr
+	if ('MgIb' in ions):
+		oldErr[len(oldErr) - 5: len(oldErr) - 2] = newErr
+	else:
+		oldErr[len(oldErr) - 4: len(oldErr) - 1] = newErr
 	
 	"""
 	temp = []
@@ -919,10 +990,10 @@ def sepFeDoub(sp, rest1, rest2, ind = [], fit = False):
 
 	error = []
 	
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))	
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[0]*p1[1])**2 + (errors[1]*p1[0])**2)))
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
-	error.append(np.sqrt(np.sqrt(math.pi) * ((errors[4]*p1[3])**2 + (errors[3]*p1[4])**2)))
+	error.append(np.sqrt(2 * math.pi) * (errors[0]*p1[1] + errors[1]*p1[0]))	
+	error.append(np.sqrt(2 * math.pi) * (errors[0]*p1[1] + errors[1]*p1[0]))
+	error.append(np.sqrt(2 * math.pi) * (errors[4]*p1[3] + errors[3]*p1[4]))
+	error.append(np.sqrt(2 * math.pi) * (errors[4]*p1[3] + errors[3]*p1[4]))
 	
 	eqws = []
 	eqws.append(np.abs(integrate.quad(lambda x: p1[0] * np.exp(-(x-rest1*(1+p1[2]))**2/(2*p1[1]**2)), min(x1), max(x2))[0]))
@@ -950,95 +1021,120 @@ def sepFeDoub(sp, rest1, rest2, ind = [], fit = False):
 		return fits
 		
 #finds systematic errors for EQWs
-def monteCarlo(mc, sp, mgtriplet = False, plot = False, fetriplet = False, rests = [], inds = []):
+def monteCarlo(mc, sp, mgtriplet = False, fetriplet = False, rests = [], inds = [[]], plot = False):
+	global linsp
+	""""
+	if (sp.visit == 1) & (sp.sn == '2013dy'):
+		linsp = True
+	"""
+	if (sp.sn == '2014J') & (sp.visit < 4):
+		linsp = True
+	if (sp.sn == '2014J') & (sp.visit == 10):
+		linsp = True
+	shift = .5
+	if (sp.sn == '2011by') & (sp.visit == 2):
+		shift = .5
+	if (sp.sn == '2012cg'):
+		shift = 2
+		
+	tele = 'uv'
+	if (sp.sn == '2013dy'):
+		tele = 'hst'
+		
 	print "Finding error for", sp.name
-	ten = True
-	twenty = True
-	thirty = True
-	forty = True
-	fifty = True
-	sixty = True
-	seventy = True
-	eighty = True
-	ninety = True
 	spectra=[]
 	for i in range(mc):
-		nsp = spectrum()
-		nsp.sn = sp.sn
-		nsp.order = sp.order
-		nsp.bin = sp.bin
-		nsp.wave = sp.wave
-		nsp.flux = sp.flux
-		nsp.var = (findErrors(nsp.flux)**-1)
-		#if (sp.sn == '2012cg'):
-		#	nsp.bkpts = randBreak(sp.bkpts, 1.5)
-		#else:
-		#	nsp.bkpts = randBreak(sp.bkpts)
-		nsp.bkpts = sp.bkpts
-		nsp.visit = sp.visit
+		good = True
+		nsp = initSpec('sn' + str(sp.sn) + '/Data/data/sn' + str(sp.sn) + '-visit' + str(int(sp.visit)) + '-' + tele + '.flm')
+		nsp.bkpts = [bp + np.random.normal(0, .68, 1)[0] * shift for bp in sp.bkpts]
+		nsp.var = findErrors(nsp.flux)**-1
+		nsp.sflux, nsp.norm_flux = interpolate(nsp, nsp.bkpts)
 		nsp.inc = sp.inc
-		sp_flux, norm = interpolate(nsp, nsp.bkpts, True)
-		nsp.norm_flux = norm
-		nsp.sflux = sp_flux
-		#nsp.cont_err = findErrors(nsp.flux, nsp.sflux)
+		"""
+		inc = []
+		left, right = 0, 0
+		j = 0
+		while (j < len(nsp.inc)):
+			ind = np.where((nsp.wave > nsp.inc[j] - 1.5) & (nsp.wave < nsp.inc[j + 1] + 1.5))[0]
+			nf = nsp.norm_flux[ind]
+			min, index = 999999, 0
+			for f in range(len(nf)):
+				if nf[f] < min:
+					min, index = nf[f], f
+			r, s = -1, 1
+			rcont, scont = True, True
+			rdiff, sdiff = 999, 999
+			while (rcont | scont):
+				if (index + r) >= 0:
+					rf = nf[index + r]
+				else:
+					rcont = False
+				try:
+					sf = nf[index + s]
+				except:
+					scont = False
+				if (np.abs(rf - 1) < rdiff) & rcont:
+					left = nsp.wave[ind][index + r]
+					rdiff = np.abs(rf - 1)
+				if (np.abs(sf - 1) < sdiff) & scont:
+					right = nsp.wave[ind][index + s]
+					sdiff = np.abs(sf - 1)
+				r -= 1
+				s += 1
+			cont = True
+			while(cont):
+				temp = np.where((nsp.wave > left) & (nsp.wave < right))[0]
+				if len(temp) < 3:
+					left -= .1
+					right += .1
+				else:
+					cont = False
+			inc = np.append(inc, [round(left, 2), round(right, 2)])
+			j += 2
+		inc = list(inc)
+		for j in range(len(inc)):
+			if inc.count(inc[j]) > 1:
+				inc[j] -= .01
+		inc = np.array(inc)
+		nsp.inc = inc
+		"""
 		if (plot):
-			#plt.plot(nsp.wave, nsp.flux)
-			#plt.plot(nsp.wave, nsp.sflux)
-			#plt.xlim(2300, 2625)
-			#plt.ylim(0, .2e-14)
-			#temp = raw_input('sdf')
-			#plt.savefig(sp.dir + 'eqw/MonteCarlo/lines/b-spline' + sp.name + ', rand ' + str(i + 1) + '.png')
-			#plt.close()
 			findEqw(nsp, True)
 			plt.xlim(2300, 2900)
 			plt.ylim(0, 1.5)
-			plt.savefig(sp.dir + 'eqw/MonteCarlo/lines/' + sp.name + ', rand ' + str(i + 1) + '.png')
-			plt.close()
 		else:
 			findEqw(nsp,False)
 		if (mgtriplet):
-			sepMgDoub(nsp, False)
+			try:	
+				sepMgDoub(nsp, False)
+			except:
+				good = False
+			if (plot):
+				plt.plot(sp.wfit, sp.comb, sp.wfit, sp.gausB, sp.wfit, sp.gausC, sp.wfit, sp.doubA, sp.wfit, sp.doubB, sp.wfit, sp.sing)
 		if (fetriplet):
 			l = len(rests) - 1
 			m = len(inds) - 1
 			while(l > 0):
-				sepFeDoub(nsp, rests[l - 1], rests[l], inds[m], False)
+				if (plot):
+					fits = sepFeDoub(nsp, rests[l - 1], rests[l], inds[m], True)
+					wfit = fits['wfit']
+					plt.plot(wfit, fits['comb'], wfit, fits['gausB'], wfit, fits['gausC'], wfit, fits['doubA'], wfit, fits['doubB'], wfit, fits['sings'])
+				else:
+					sepFeDoub(nsp, rests[l - 1], rests[l], inds[m], False)
 				l -= 2
 				m -= 1
-			
-		spectra.append(nsp)
-		statusBar(i, mc)
-		"""
-		if ((float(i) / float(mc)) > .1)):
-			print '10% Finished'
-			ten = False
-		if (((float(i) / float(mc)) > .2) & (twenty)):
-			print '20% Finished'
-			twenty = False
-		if (((float(i) / float(mc)) > .3) & (thirty)):
-			print '30% Finished'
-			thirty = False
-		if (((float(i) / float(mc)) > .4) & (forty)):
-			print '40% Finished'
-			forty = False
-		if (((float(i) / float(mc)) > .5) & (fifty)):
-			print '50% Finished'
-			fifty = False
-		if (((float(i) / float(mc)) > .6) & (sixty)):
-			print '60% Finished'
-			sixty = False
-		if (((float(i) / float(mc)) > .7) & (seventy)):
-			print '70% Finished'
-			seventy = False
-		if (((float(i) / float(mc)) > .8) & (eighty)):
-			print '80% Finished'
-			eighty = False
-		if (((float(i) / float(mc)) > .9) & (ninety)):
-			print '90% Finished'
-			ninety = False
-		if (i == mc):
-			print '100% Finished'
-		"""
+		if (plot):
+			plt.savefig(sp.dir + 'eqw/MonteCarlo/lines/' + sp.name + ', rand ' + str(i + 1) + '.png')
+			plt.close()
+		if (0 in nsp.eqws):
+			good = False
+		if (good):
+			spectra.append(nsp)
+		else:
+			i -= 1
+		statusBar(i + 1, mc)
+	sys.stdout.write('\n')
+	
 	
 	mc_lo_errs = []
 	mc_hi_errs = []
@@ -1105,87 +1201,87 @@ def orgMeas(spectra, k, ionNum):
 	spectra[k] = s
 
 #prints a status bar to run during loops	
-def statusBar(count, total):
+def statusBar(count, total, counter = ':'):
 	sys.stdout.write('\r')
 	sys.stdout.write('[')
 	if ((float(count) / float(total)) >= .05):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .1):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .15):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .2):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .25):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .3):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .35):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .4):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .45):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .5):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .55):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .6):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .65):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .7):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .75):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .8):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .85):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .9):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if ((float(count) / float(total)) >= .95):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	else:
 		sys.stdout.write(' ')
 	if (count == total):
-		sys.stdout.write('~')
+		sys.stdout.write(counter)
 	per = str(int(round(float(count) / float(total), 2) * 100))
 	sys.stdout.write('] ' + per + '%')
 	
@@ -1290,25 +1386,23 @@ def loadData(dir):
 	
 	#load spectrum info
 	files = glob.glob(dir + '/data/*.flm')
+	i = 1
 	for f in files:
 		sp = spectrum()
 		spNames(f, sp)
 		getSpectrum(f, sp)
 		try:
-			if sp.sn == '2013dy':
-				getBkpts(sp, True)
-			else:
-				getBkpts(sp)
+			getBkpts(sp)
 		except IOError as e:
-			print "No Breakpoints"
+			sys.stdout.write(" No Breakpoints")
 		try:
 			loadInc(sp)
 		except IOError as e:
-			print "No Include Values"
+			sys.stdout.write(" No Include Values")
 		try:
 			loadParam(sp)
 		except IOError as e:
-			print "No Parameters Saved"
+			sys.stdout.write(" No Parameters Saved")
 			
 		file = sp.dir + 'spectra/' + sp.name + '.flm'
 		t = Table.read(file, format = 'ascii')
@@ -1327,30 +1421,30 @@ def loadData(dir):
 			for a in attr:
 				setattr(sp, a, t[a])
 		except IOError as e:
-			print "No fits"
+			sys.stdout.write(" No fits 	")
 		
 			
 		spectra.append(sp)
+		statusBar(i, len(files))
+		i += 1
 	
 	return spectra
 
 #Calculates the goodness of fit for each line via Chi-square tests
-def chiSq(spectra):
-	sort_sp = []
-	temp = 0
-	for s in spectra:
-		if s.visit < temp:
-			sort_sp.insert(len(sort_sp) - 1, s)
-		else:
-			sort_sp.append(s)
-			temp = s.visit
-	spectra = sort_sp
+def chiSq(spectra, order = 0):
+	spectra.sort(key = lambda x: x.visit)
+	
+	eps = epochs.values()
+	eps.sort()
 	
 	eqws = []
 	for i in range(len(spectra[0].eqws)):
 		ion = []
 		for s in spectra:
-			ion.append(s.eqws[i])
+			if (s.eqws[i] != 0):
+				ion.append(s.eqws[i])
+			else:
+				ion.append(s.sig3[i])
 		eqws.append(ion)
 		
 	errs = []
@@ -1364,38 +1458,57 @@ def chiSq(spectra):
 	for e in errs:
 		temp = []
 		for i in e:
-			temp.append(1/i**2)
+			if (i != 0):
+				temp.append(1/i)
+			else:
+				temp.append(0)
 		weights.append(temp)
 		
-	deltaEqw = []
-	stds = []
-	count = 0
-	for e in eqws:
-		avg = np.average(e, weights = weights[count])
-		temp = []
-		for i in e:
-			temp.append(i - avg)
-		deltaEqw.append(temp)
-		stds.append(np.std(temp))
-		count += 1
+	if (order != 0):
+		fits = []
+		for i in range(len(eqws)):
+			fit = np.polyfit(eps, eqws[i], order, w = weights[i])
+			fits.append(fit)
+			
+		exp = []
+		for i in range(len(eqws)):
+			e = []
+			for j in range(len(eqws[i])):
+				e.append(fits[i][0] * eps[j] + fits[i][1])
+			exp.append(e)
+			
+		ddof = 1
+	else:	
+		exp = []
+		count = 0
+		for e in eqws:
+			avg = np.average(e, weights = weights[count])
+			ex = np.empty(len(e))
+			ex[:] = avg
+			exp.append(ex)
+			count += 1
+			
+		ddof = 0
 		
 	chisq = []
-	i = 0
-	for deqw in deltaEqw:
-		chisq_sum = 0
-		#err = errs[i]
-		#count = 0
-		for d in deqw:
-			chisq_sum += (d/stds[i])**2
-			#count += 1
-		chisq.append(chisq_sum)
-		i += 1
-		
 	chisqRed = []
-	for c in chisq:
-		chisqRed.append(c / len(eqws[0]) - 1)
+	pvalues = []
+	for i in range(len(eqws)):
+		temp = ddof
+		chi = 0
+		j = 0
+		ews = []
+		for o in eqws[i]:
+			if (errs[i][j] != 0):
+				chi += ((o - exp[i][j]) / errs[i][j])**2
+			else:	
+				temp += 1
+			j += 1
+		chisq.append(chi)
+		chisqRed.append(chi/ (len(eqws[0]) - 1 - temp))
+		pvalues.append(chi2.pdf(chi, (len(eqws[0]) - 1 - temp)))
 		
-	return chisq, chisqRed
+	return chisq, chisqRed, pvalues
 	
 #Plots eqws for each spectrum in parameter array. Each species plotted in same subplot.
 def plotEqw(spectra):
@@ -1459,7 +1572,7 @@ def plotEqw(spectra):
 		var = []
 		for j in range(len(hi_err[i])):
 			avg = (lo_err[i][j] + hi_err[i][j]) / 2
-			var.append(1/avg**2)
+			var.append(1/avg)
 		weights.append(var)	
 		
 	stdDev = []
@@ -1705,27 +1818,43 @@ def proPlot(spectra, num):
 	spectra = sort_sp
 	
 	i = 0
-	while (i < len(spectra) - num):
+	while i < len(spectra):
 		spec = []
 		for n in range(num):
-			spec.append(spectra[i + n])
+			try:
+				spec.append(spectra[i + n])
+			except:
+				continue
 		t = spec[0].name + '-' + spec[len(spec) - 1].name
 		print t
 		j = 0
 		while (j < len(spec[0].inc) - 1):
 			plt.figure()
 			for s in spec:
-				plt.plot(s.wave, s.norm_flux, label = s.name, linestyle = 'steps')
+				plt.plot(s.wave, s.norm_flux, label = s.name, linestyle = 'steps', linewidth = 2)
 			plt.xlim(spec[0].inc[j] - 20, spec[0].inc[j+1] + 20)
-			plt.ylim(.4, 1.2)
-			plt.show()
+			
+			ymin, ymax = 9999999, -9999999
+			for s in spec:
+				ind = np.where((s.wave > s.inc[j] - 20) & (s.wave < s.inc[j + 1]))[0]
+				tmax = max(s.norm_flux[ind])
+				tmin = min(s.norm_flux[ind])
+				if tmin < ymin:
+					ymin = tmin
+				if tmax > ymax:
+					ymax = tmax
+			ymax += .2
+			ymin -= .2
+			plt.ylim(ymin, ymax)
+			#name = ions[j]
 			name = raw_input('Absorption Feature: ')
 			plt.title(t + ': ' + name)
+			plt.show()
 			legend = plt.legend(loc = 'upper right')
 			plt.savefig('sn' + spec[0].sn + '/Data/Pictures/' + name	+ '-' + t + '.png')
 			plt.close()
 			j += 2
-		i += 1
+		i += num - 1
 		
 #Allows user to select the SN to work with (initializes initial parameters)
 def pickSN(sn = ''):
@@ -1743,7 +1872,8 @@ def pickSN(sn = ''):
 			epochs = {'visit1':4.98, 'visit2': 44.83, 'visit3': 289.58}
 			order5 = []
 			bins = {1:17, 2:17, 3:17}
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = True
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif (sn == '06x' or sn == '06X'):
 			exclude = []
@@ -1752,7 +1882,8 @@ def pickSN(sn = ''):
 			epochs = {'visit1': -2, 'visit2': 14, 'visit3': 61, 'visit4': 105}
 			order5 = []
 			bins = {1:17, 2:17, 3:17, 4:17}
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = True
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '11by'):
 			"""
@@ -1772,7 +1903,8 @@ def pickSN(sn = ''):
 			epochs = {'visit1': -9.31, 'visit2': -0.52}
 			order5 = []
 			bins = {1:17, 2:17}
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = True
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '11ek'):
 			#11ek params
@@ -1782,18 +1914,20 @@ def pickSN(sn = ''):
 			epochs = {'visit1': -3.32, 'visit2': 3.53}
 			order5 = []
 			bins = {1:17, 2:17}
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = False
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '11fe'):
 			#11fe params
-			exclude = [2335.77, 2355.43, 2365.27, 2392.99, 2583.5, 2610.51, 2790.31, 2814.42, 2846.31, 2860.45]
+			exclude = [2340.99, 2350.32, 2371.01, 2389.01, 2583.5, 2594.17, 2599.95, 2605.43, 2790.31, 2811.01, 2851.12, 2860.45]
 			#exclude = [2341.34, 2350.47, 2372.48, 2390.04, 2583.58, 2607.58, 2789.51, 2813.78, 2848.5, 2862.16]
 			ions = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe','MgIIa','MgIIb','MgIa']
 			sigIons = []
 			epochs = {'visit1': -13.110599,'visit2': -10.041886, 'visit3': -6.9081770, 'visit4': -2.9512300, 'visit5': 0.039233502, 'visit6': 3.2484383, 'visit7': 9.1496879, 'visit8': 20.687449, 'visit9': 26.685855, 'visit10': 40.447814}
 			order5 = []
 			bins = {1:17, 2:17, 3:17, 4:17, 5:17, 6:17, 7:17, 8:17, 9:17, 10:17} 
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = True
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '11iv'):
 			#11iv params	
@@ -1803,29 +1937,31 @@ def pickSN(sn = ''):
 			epochs = {'visit1': .6, 'visit2': 5.41, 'visit3': 10.15, 'visit4': 13.99, 'visit5': 17.82, 'visit6': 21.72, 'visit7': 29.52}
 			order5 = []
 			bins = {1:17, 2:17, 3:17, 4:17, 5:17, 6:17, 7:17} 
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = False
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '12cg'):
 			#12cg params
-			exclude = [2790.48, 2818.01, 2847.22, 2869.38]
-			ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa']
+			exclude = [2790.48, 2814.70, 2850.22, 2865.17]
+			ions = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa',]
 			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe']
 			epochs = {'visit1': 2.5, 'visit2':16.37}
 			order5 = []
 			bins = {1:17, 2:17}
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = True
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '13dy'):
-			
 			#13dy params (w/out SiII)
-			exclude = [2335.7, 2364, 2371.27, 2402.09, 2585, 2619, 2790.77, 2824.9, 2846.13, 2873.7]
+			exclude = [2339, 2360, 2375, 2400, 2585, 2615, 2790.77, 2824.9, 2846.13, 2873.7]
 			ions = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe', 'MgIIa', 'MgIIb', 'MgIIc', 'MgIId', 'MgIa', 'MgIb']
 			ionsLim = ['MgIIa', 'MgIIb', 'MgIIc', 'MgIId']
 			sigIons = ['FeIIa','FeIIb','FeIIc','FeIId','FeIIe']
 			epochs = {'visit1': -6.17, 'visit2': -2.09, 'visit3':  -0.37, 'visit4':  1.61, 'visit5':  4.85, 'visit6':  8.76, 'visit7':  12.36, 'visit8':  14.38, 'visit9':  18.22, 'visit10':  21.17}
 			order5 = []
 			bins = {1:10, 2:10, 3:17, 4:10, 5:17, 6:10, 7:10, 8:12, 9:17, 10:10} 
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = False
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		elif(sn == '14j' or sn == '14J'):
 			#14j params
@@ -1835,7 +1971,8 @@ def pickSN(sn = ''):
 			epochs = {'visit1': -6.4956025 , 'visit2': -4.4969556, 'visit3':  -2.4983087, 'visit4':  -0.49966173 , 'visit5':  2.4983087, 'visit6':  6.4956025, 'visit7':  8.4942495, 'visit8':  11.492220 , 'visit9':  14.490190, 'visit10':  24.052866}	
 			order5 = []
 			bins = {1:17, 2:17, 3:17, 4:17, 5:17, 6:17, 7:17, 8:17, 9:17, 10:17} 
-			setGlobals(exclude, ions, epochs, order5, bins, sigIons)
+			linsp = False
+			setGlobals(exclude, ions, epochs, order5, bins, sigIons, linsp)
 			cont = False
 		else:
 			continue
