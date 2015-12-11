@@ -1,6 +1,6 @@
 ##############################################################################
 #
-# author: Aaron Beaudoin
+# author: Aaron T Beaudoin
 #
 # Spectral line analysis tool to be run in iPython.
 #
